@@ -9,6 +9,7 @@
 #   3) 配置 CompletionAction="关闭游戏和软件"，BetterGI 跑完会自动关游戏并退出自身
 import ctypes
 import json
+import os
 import re
 import subprocess
 def _run_hidden(cmd, **kw):
@@ -25,8 +26,8 @@ from pathlib import Path
 
 log = logging.getLogger("auto_daily")
 
-BASE = Path(__file__).resolve().parent.parent
-# 可用环境变量 HOYO_BETTERGI_DIR 覆盖；默认约定：<项目根>/tools/BetterGI/BetterGI
+BASE = Path(__file__).resolve().parent.parent          # 项目根目录（本文件在 adapters/ 下）
+# 默认 <项目根>/tools/BetterGI/BetterGI；可用环境变量 HOYO_BETTERGI_DIR 覆盖
 BETTERGI_DIR = Path(os.environ.get("HOYO_BETTERGI_DIR") or (BASE / "tools" / "BetterGI" / "BetterGI"))
 BETTERGI_EXE = BETTERGI_DIR / "BetterGI.exe"
 ONEDRAGON_DIR = BETTERGI_DIR / "User" / "OneDragon"

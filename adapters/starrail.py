@@ -21,8 +21,8 @@ from pathlib import Path
 
 log = logging.getLogger("auto_daily")
 
-BASE = Path(__file__).resolve().parent.parent
-# 可用环境变量 HOYO_MARCH7TH_DIR 覆盖；默认约定：<项目根>/tools/March7thAssistant
+BASE = Path(__file__).resolve().parent.parent          # 项目根目录
+# 部署后路径（下载解压 March7thAssistant_full.zip 到此）；可用 HOYO_MARCH7TH_DIR 覆盖
 M7A_DIR = Path(os.environ.get("HOYO_MARCH7TH_DIR") or (BASE / "tools" / "March7thAssistant"))
 CONFIG_FILE = M7A_DIR / "config.yaml"   # 运行时配置在包根目录（首次运行自动从 example 生成）
 EXE = M7A_DIR / "March7th Assistant.exe"

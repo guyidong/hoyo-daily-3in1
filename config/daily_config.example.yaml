@@ -1,37 +1,47 @@
-# 三游戏每日一条龙 · 目标配置（复制为 daily_config.yaml 使用）
+# ============================================================
+# 三游戏每日一条龙 · 目标配置
+# 首次运行会自动复制本文件为 daily_config.yaml（真正生效的是它）
+# 也可以直接双击 panel.bat 用面板改，改完点保存。
+# ============================================================
+
+# 总控
 scheduler:
   enabled: true
-  run_order: [genshin, starrail, zzz]   # 依次运行顺序
+  daily_time: "07:30"                    # 建议的每日时间（真正的定时由面板“保存定时”写入系统计划任务）
+  run_order: [genshin, starrail, zzz]    # 依次运行顺序
+  timeout_minutes: 120                   # 单次总超时，防止卡死
 
-# 工具路径（可选）：不填则使用 <项目根>/tools/... 默认约定
+# 可选：工具路径。默认 <项目根>/tools/... 与 <项目根>/OneDragon-ref
+# 也可用环境变量 HOYO_BETTERGI_DIR / HOYO_MARCH7TH_DIR / HOYO_ONEDRAGON_DIR 覆盖
 # tools:
-#   bettergi_dir: "D:/daily/tools/BetterGI/BetterGI"
-#   march7th_dir: "D:/daily/tools/March7thAssistant"
-#   one_dragon_dir: "D:/daily/OneDragon-ref"
-# proxy: "http://127.0.0.1:7890"        # 可选：下载/更新走代理时填写
+#   bettergi_dir: "tools/BetterGI/BetterGI"
+#   march7th_dir: "tools/March7thAssistant"
+#   one_dragon_dir: "OneDragon-ref"
+# proxy: "http://127.0.0.1:7890"         # 可选：下载更新 / 引擎联网走代理
 
 games:
   genshin:
     enabled: true
     name: "原神"
-    client_path: "YOUR_PATH/YuanShen.exe"      # 例：D:/Genshin Impact Game/YuanShen.exe
-    party_name: "你的队伍名"                    # 打秘境用的队伍
+    client_path: "D:/Genshin Impact Game/YuanShen.exe"   # 改成你的实际路径（正斜杠）
+    party_name: "你的队伍名"                             # 打秘境用的队伍
     display: { auto_switch_window: true, auto_width: 1920, auto_height: 1080 }
     targets:
-      - { name: "山风的荆冕", runs: 0, enabled: true }   # runs=0 表示清空树脂
+      - { name: "山风的荆冕", runs: 0, enabled: true }    # runs=0 表示清空树脂
 
   starrail:
     enabled: true
     name: "崩坏：星穹铁道"
-    client_path: "YOUR_PATH/StarRail.exe"      # 例：F:/Star Rail Game/StarRail.exe
+    client_path: "F:/Star Rail Game/StarRail.exe"        # 改成你的实际路径
     display: { auto_switch_window: true, auto_width: 1920, auto_height: 1080 }
     targets:
+      # [副本类型, 实例名, 次数]；runs=0 表示清空开拓力
       - { name: "侵蚀隧洞", mission_name: "观火之径", runs: 5, enabled: true }
 
   zzz:
     enabled: true
     name: "绝区零"
-    client_path: "YOUR_PATH/ZenlessZoneZero.exe"   # 例：D:/ZenlessZoneZero Game/ZenlessZoneZero.exe
+    client_path: "D:/ZenlessZoneZero Game/ZenlessZoneZero.exe"
     display: { auto_switch_window: true, auto_width: 1920, auto_height: 1080 }
     targets:
       - { category: "实战模拟室", mission_type: "迅雷与裂爪", mission_name: "谶羽之誓 荆棘玫瑰", runs: 4, enabled: true }

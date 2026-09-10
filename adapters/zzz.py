@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-# 绝区零引擎适配器 —— OneDragon（CLI，管理员+后台模式+虚拟手柄进游戏）
-# 关键事实（2026-09-10 实测）：
-#   1) OneDragon 必须以【管理员】运行（否则 PostMessage 被受保护窗口拒绝）
-#   2) 登录页"点击进入游戏"：合成鼠标/PostMessage 都无效 —— 只有【虚拟手柄 A 键】有效（实测）
-#   3) 进入游戏后（大世界）：OneDragon 管理员+后台模式可正常完成全部任务（实测 ok=True）
-#   4) 计划任务 /RL HIGHEST 上下文 = 提权 → 直接 Popen 启动 CLI（无任何 UAC）
-#   5) 启动前先杀游戏：让 OneDragon 走"打开游戏"，再由本适配器用手柄 A 送入游戏
+# 绝区零引擎适配器 —— OneDragon（官方 CLI，前台模式）
+# 关键事实（实测）：
+#   1) OneDragon 必须以【管理员】运行（否则 PostMessage 被受保护的游戏窗口拒绝，错误 5）
+#   2) 必须用【前台模式】background_mode: false —— 后台模式下登录页点击会失败（实测）
+#   3) 计划任务 /RL HIGHEST 上下文 = 提权 → 直接 Popen 启动 CLI（无任何 UAC）
+#   4) 启动前先杀游戏：让 OneDragon 自己走"打开游戏 → 进入游戏"的完整流程
+#   5) 不使用任何虚拟手柄/驱动：前台模式 + 正常输入即可
 import os
 import time
 import subprocess
@@ -14,8 +14,8 @@ from pathlib import Path
 
 log = logging.getLogger("auto_daily")
 
-BASE = Path(__file__).resolve().parent.parent
-# 可用环境变量 HOYO_ONEDRAGON_DIR 覆盖；默认约定：<项目根>/OneDragon-ref
+BASE = Path(__file__).resolve().parent.parent          # 项目根目录
+# 默认 <项目根>/OneDragon-ref；可用环境变量 HOYO_ONEDRAGON_DIR 覆盖
 ONE_DRAGON_DIR = Path(os.environ.get("HOYO_ONEDRAGON_DIR") or (BASE / "OneDragon-ref"))
 LAUNCHER = ONE_DRAGON_DIR / "src" / "zzz_od" / "application" / "zzz_application_launcher.py"
 PY = ONE_DRAGON_DIR / ".venv" / "Scripts" / "python.exe"
@@ -106,16 +106,17 @@ class ZZZAdapter:
                 break
             time.sleep(1)
         env = os.environ.copy()
-        proxy = os.environ.get("HOYO_PROXY", "").strip()   # 可选：如 http://127.0.0.1:7890
+        # 可选：HOYO_PROXY / 配置里的 proxy 才注入代理（默认不设）
+        proxy = (os.environ.get("HOYO_PROXY") or self.cfg.get("proxy") or "").strip()
         if proxy:
             env["HTTP_PROXY"] = proxy
             env["HTTPS_PROXY"] = proxy
         args = [str(PY), str(LAUNCHER), "-c", "-i", INSTANCE]
         log.info("[zzz] 启动 OneDragon CLI(提权上下文，无 UAC): %s", " ".join(args))
         try:
-            cli_log_path = BASE / "logs" / "zzz_cli.log"
-            cli_log_path.parent.mkdir(parents=True, exist_ok=True)
-            self._cli_log = open(cli_log_path, "ab", buffering=0)
+            log_dir = BASE / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            self._cli_log = open(log_dir / "zzz_cli.log", "ab", buffering=0)
         except Exception:
             self._cli_log = subprocess.DEVNULL
         self.proc = subprocess.Popen(args, cwd=str(ONE_DRAGON_DIR), env=env,

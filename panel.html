@@ -1,0 +1,145 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<title>三游戏每日一条龙 · 集成面板</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{font-family:"Microsoft YaHei",system-ui,sans-serif;background:#0f1115;color:#e8eaed;margin:0;padding:22px}
+h1{font-size:20px;margin:0 0 4px}.sub{color:#9aa0a6;font-size:13px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px}
+.card{background:#181b21;border:1px solid #262a33;border-radius:12px;padding:14px}
+.card h2{font-size:15px;margin:0 0 8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+label{display:block;font-size:12px;color:#9aa0a6;margin:8px 0 4px}
+input[type=text],input[type=time],input[type=number]{width:100%;box-sizing:border-box;background:#0f1115;border:1px solid #2c313c;color:#e8eaed;border-radius:8px;padding:7px;font-size:13px}
+button{background:#2563eb;border:0;color:#fff;padding:8px 12px;border-radius:8px;cursor:pointer;font-size:13px}
+button.ghost{background:#232833}button.green{background:#059669}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:9px}
+.tag{font-size:11px;padding:2px 8px;border-radius:999px;background:#232833;color:#9aa0a6}
+.tag.ok{background:#064e3b;color:#6ee7b7}.tag.no{background:#3f1d1d;color:#fca5a5}
+pre{background:#0b0d11;border:1px solid #232833;border-radius:10px;padding:12px;max-height:250px;overflow:auto;font-size:12px;line-height:1.55}
+.bar{height:8px;background:#232833;border-radius:99px;overflow:hidden;margin-top:8px}.bar>i{display:block;height:100%;background:#2563eb;width:0}
+</style></head><body>
+<h1>三游戏每日一条龙 · 集成面板</h1>
+<div class="sub">游戏内操作由社区工具完成：BetterGI（原神）· March7thAssistant（崩铁）· OneDragon（绝区零）。本面板负责下载、启动、配置与调度。</div>
+
+<div class="card" style="margin-top:14px">
+  <h2>🧩 社区工具 <span class="tag" id="toolState">…</span></h2>
+  <div class="grid" id="tools"></div>
+  <div class="row">
+    <label style="margin:0">下载代理（可选）</label>
+    <input type="text" id="proxy" style="max-width:260px" placeholder="例 http://127.0.0.1:7890，留空=直连">
+    <button class="green" onclick="installTools()">下载 / 更新所选工具</button>
+  </div>
+  <div class="bar"><i id="pbar"></i></div>
+  <div class="sub" id="pmsg" style="margin-top:6px"></div>
+  <pre id="tlog" style="margin-top:10px">（下载日志）</pre>
+</div>
+
+<div class="card" style="margin-top:14px">
+  <h2>⏰ 每日定时 <span class="tag" id="tstate">…</span></h2>
+  <div class="row">
+    <div style="flex:0 0 150px"><label>每天开跑时间</label><input type="time" id="runTime" value="07:30"></div>
+    <button onclick="saveTime()">保存定时</button>
+    <button class="ghost" onclick="runNow()">立即运行一轮</button>
+    <span class="sub" id="tinfo"></span>
+  </div>
+</div>
+
+<div class="grid" id="cards"></div>
+
+<div class="card" style="margin-top:14px">
+  <h2>📜 运行日志</h2>
+  <div class="row"><button class="ghost" onclick="loadLog()">刷新</button></div>
+  <pre id="log">点「刷新」查看</pre>
+</div>
+
+<script>
+const TOOLS=[{k:"bettergi",n:"BetterGI",g:"原神"},{k:"march7th",n:"March7thAssistant",g:"崩铁"},{k:"onedragon",n:"OneDragon",g:"绝区零"}];
+const GAMES=[{k:"genshin",n:"原神",tool:"BetterGI"},{k:"starrail",n:"崩铁",tool:"March7th"},{k:"zzz",n:"绝区零",tool:"OneDragon"}];
+let CFG=null;
+const J=async(u,o)=>(await fetch(u,o)).json();
+
+async function loadTools(){
+  const s=await J("/api/tools");
+  document.getElementById("toolState").textContent = s.running ? ("进行中: "+(s.phase||"")) : "就绪";
+  document.getElementById("pbar").style.width=(s.percent||0)+"%";
+  document.getElementById("pmsg").textContent=s.msg||"";
+  document.getElementById("tlog").textContent=(s.log||[]).join("\n")||"（下载日志）";
+  const b=document.getElementById("tools"); b.innerHTML="";
+  for(const t of TOOLS){
+    const ok=(s.installed||{})[t.k];
+    const div=document.createElement("div"); div.className="card"; div.style.margin="0";
+    div.innerHTML = "<h2>"+t.n+" <span class=\"tag\">"+t.g+"</span> <span class=\"tag "+(ok?"ok":"no")+"\">"+(ok?"已安装":"未安装")+"</span></h2>"+
+      "<div class=\"row\"><input type=\"checkbox\" id=\"ck_"+t.k+"\" "+(ok?"":"checked")+"><label style=\"margin:0\">选择下载/更新</label></div>"+
+      "<div class=\"row\"><button class=\"ghost\" data-launch=\""+t.k+"\">启动界面</button></div>";
+    div.querySelector("button[data-launch]").onclick=()=>launch(t.k);
+    b.appendChild(div);
+  }
+  if(s.running) setTimeout(loadTools,1500);
+}
+
+async function installTools(){
+  const ks=TOOLS.filter(t=>document.getElementById("ck_"+t.k).checked).map(t=>t.k);
+  if(!ks.length){alert("请先勾选要下载的工具");return}
+  if(!confirm("开始下载/更新："+ks.join(", ")+" ？\n大文件（数百 MB），请保持网络畅通。"))return;
+  const r=await J("/api/tools/install",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({keys:ks,proxy:document.getElementById("proxy").value})});
+  if(!r.ok) alert(r.msg||"启动失败");
+  loadTools();
+}
+
+async function launch(k){
+  const r=await J("/api/tools/launch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:k})});
+  alert(r.ok?r.msg:(r.msg||"启动失败"));
+}
+
+async function load(){
+  CFG=await J("/api/config"); const t=await J("/api/task");
+  document.getElementById("tstate").textContent=t.exists?("任务: "+(t.state||"?")):"未注册";
+  if(t.time) document.getElementById("runTime").value=t.time.slice(0,5);
+  document.getElementById("tinfo").textContent=t.next?("下次运行: "+t.next):"";
+  const b=document.getElementById("cards"); b.innerHTML="";
+  for(const g of GAMES){
+    const c=(CFG.games||{})[g.k]||{}; const tg=(c.targets||[])[0]||{};
+    const div=document.createElement("div"); div.className="card";
+    div.innerHTML="<h2>"+g.n+" <span class=\"tag\">"+g.tool+"</span></h2>"+
+      "<div class=\"row\"><input type=\"checkbox\" id=\""+g.k+"_en\" "+(c.enabled?"checked":"")+"><label style=\"margin:0\">启用每日自动</label></div>"+
+      "<label>游戏路径</label><input type=\"text\" id=\""+g.k+"_path\" value=\""+(c.client_path||"")+"\">"+
+      "<label>目标任务</label><input type=\"text\" id=\""+g.k+"_task\" value=\""+(tg.name||tg.mission_name||"")+"\">"+
+      "<label>次数（0=清空体力/电量）</label><input type=\"number\" id=\""+g.k+"_runs\" value=\""+(tg.runs!==undefined?tg.runs:0)+"\">"+
+      "<div class=\"row\"><button data-save=\""+g.k+"\">保存</button><span class=\"sub\">跑完自动关游戏并还原你的全屏</span></div>";
+    div.querySelector("button[data-save]").onclick=()=>saveGame(g.k);
+    b.appendChild(div);
+  }
+}
+
+async function saveGame(k){
+  const c=CFG.games[k]||(CFG.games[k]={});
+  c.enabled=document.getElementById(k+"_en").checked;
+  c.client_path=document.getElementById(k+"_path").value;
+  const t=(c.targets&&c.targets[0])||(c.targets=[{}])[0];
+  const v=document.getElementById(k+"_task").value;
+  if(t.mission_name!==undefined && !t.name) t.mission_name=v; else t.name=v;
+  t.runs=parseInt(document.getElementById(k+"_runs").value||"0");
+  await J("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(CFG)});
+  alert("已保存"); load();
+}
+
+async function saveTime(){
+  const v=document.getElementById("runTime").value;
+  const r=await J("/api/task",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({time:v})});
+  alert(r.ok?("定时已更新为 "+v):((r.msg||"更新失败")+"\n提示：注册定时需要管理员权限——请右键 start_page.bat 以管理员身份运行后再改。"));
+  load();
+}
+
+async function runNow(){
+  if(!confirm("立即运行三个游戏的每日流程？")) return;
+  const r=await J("/api/run",{method:"POST"});
+  alert(r.ok?"已开始运行（看下方日志）":(r.msg||"启动失败"));
+  setTimeout(loadLog,3000);
+}
+
+async function loadLog(){
+  const r=await J("/api/log");
+  document.getElementById("log").textContent=r.text||"(空)";
+}
+
+load(); loadTools();
+</script></body></html>

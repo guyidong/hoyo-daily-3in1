@@ -1,5 +1,10 @@
 logs/
 config/daily_config.yaml
+downloads/
+tools/
+OneDragon-ref/
+*.7z
+*.part
 __pycache__/
 *.pyc
 _auto_daily.lock
