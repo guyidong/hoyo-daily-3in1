@@ -1,0 +1,6 @@
+logs/
+config/daily_config.yaml
+__pycache__/
+*.pyc
+_auto_daily.lock
+.venv/
