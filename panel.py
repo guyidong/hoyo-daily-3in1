@@ -47,6 +47,12 @@ def load_cfg():
 
 def save_cfg(d):
     CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    # 备份一份（面板保存会重写 YAML，注释可能丢失；备份便于回退）
+    if CONFIG.exists():
+        try:
+            (CONFIG.parent / "daily_config.yaml.bak").write_bytes(CONFIG.read_bytes())
+        except Exception:
+            pass
     CONFIG.write_text(yaml.safe_dump(d, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
