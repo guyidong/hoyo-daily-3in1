@@ -50,6 +50,24 @@ GAME_KEYS = {
 }
 AUTO_WIDTH, AUTO_HEIGHT = 1920, 1080   # 自动化用的窗口化分辨率（16:9，BetterGI 要求）
 
+# ★ 星铁/绝区零 每项显示设置都有"两套键"（实测 2026-09-12）：
+#   游戏内改设置时写的是普通键；另有一套 "… Default_h…" 镜像键（哈希后缀不同，推算不出来，只能写死）。
+#   只写一套会被另一套覆盖（结果就是"跑完还是窗口"）。所以这里两套一起读写。
+MIRROR = {
+    "starrail": {
+        "Screenmanager Resolution Width_h182942802": "Screenmanager Resolution Width Default_h680557497",
+        "Screenmanager Resolution Height_h2627697771": "Screenmanager Resolution Height Default_h1380706816",
+        "Screenmanager Fullscreen mode_h3630240806": "Screenmanager Fullscreen mode Default_h401710285",
+        "Screenmanager Resolution Use Native_h1405027254": "Screenmanager Resolution Use Native Default_h1405981789",
+    },
+    "zzz": {
+        "Screenmanager Resolution Width_h182942802": "Screenmanager Resolution Width Default_h680557497",
+        "Screenmanager Resolution Height_h2627697771": "Screenmanager Resolution Height Default_h1380706816",
+        "Screenmanager Fullscreen mode_h3630240806": "Screenmanager Fullscreen mode Default_h401710285",
+        "Screenmanager Resolution Use Native_h1405027254": "Screenmanager Resolution Use Native Default_h1405981789",
+    },
+}
+
 # ★ 用户自己的屏幕设置档案（关键！）：万一注册表被"自动化残留"污染（游戏退出时回写窗口化），
 #   下次就能从这里恢复，而不是把污染状态又"恢复"一遍。
 PROFILE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "display_user.json")
@@ -79,6 +97,10 @@ def _all_keys(game):
     if g["use_native"]:
         names.append(g["use_native"])
     names += g["extra"]
+    for n in list(names):
+        m = MIRROR.get(game, {}).get(n)
+        if m:
+            names.append(m)
     return names
 
 
@@ -119,6 +141,16 @@ def apply(game, width, height, fullscreen, use_native=None):
     for extra in g["extra"]:
         if extra == "GraphicsSettings_PCResolution_h431323223":
             write_value(g["reg"], extra, _bytes_json(width, height, fullscreen), winreg.REG_BINARY)
+    # 镜像键（Default 那套）必须同步写，否则它会在下次启动时把我们写的覆盖回窗口
+    for n, m in MIRROR.get(game, {}).items():
+        if n == g["width"]:
+            write_value(g["reg"], m, width, winreg.REG_DWORD)
+        elif n == g["height"]:
+            write_value(g["reg"], m, height, winreg.REG_DWORD)
+        elif n == g["fullscreen"]:
+            write_value(g["reg"], m, 1 if fullscreen else win_val, winreg.REG_DWORD)
+        elif g["use_native"] and n == g["use_native"] and use_native is not None:
+            write_value(g["reg"], m, 1 if use_native else 0, winreg.REG_DWORD)
     return f"{game}: {width}x{height} fullscreen={fullscreen} native={use_native}"
 
 
@@ -128,11 +160,18 @@ def set_windowed(game, width=AUTO_WIDTH, height=AUTO_HEIGHT):
 
 def restore(game, state):
     g = GAME_KEYS[game]
+    n_written = 0
     for name, info in state.items():
         value, typ = _restore_value(name, info)
         if typ is not None and value is not None:
             write_value(g["reg"], name, value, typ)
-    return f"restored {game} ({len(state)} keys)"
+            n_written += 1
+            # 老档案只有普通键：镜像键（Default 那套）同步补上，否则会被它覆盖
+            m = MIRROR.get(game, {}).get(name)
+            if m and m not in state:
+                write_value(g["reg"], m, value, typ)
+                n_written += 1
+    return f"restored {game} ({n_written} keys)"
 
 
 def build_state(game, width, height, fullscreen, use_native=None):
@@ -257,6 +296,16 @@ def wait_game_exit(game, timeout_s: int = 10800, interval_s: int = 5, stable_s: 
             return False
 
 
+def mirror_mismatch(game):
+    """两套键是否有不一致（不一致＝下次启动可能被覆盖，是"又变窗口"的元凶）。"""
+    s = snapshot(game)
+    bad = []
+    for n, m in MIRROR.get(game, {}).items():
+        if n in s and m in s and s[n].get("value") != s[m].get("value"):
+            bad.append((n, s[n].get("value"), m, s[m].get("value")))
+    return bad
+
+
 def current(game):
     s = snapshot(game)
     g = GAME_KEYS[game]
@@ -275,6 +324,11 @@ def main():
         print("未知游戏:", game); return 1
     if cmd == "snapshot":
         print(current(game))
+        bad = mirror_mismatch(game)
+        for n, v1, m, v2 in bad:
+            print(f"  ⚠ 两套键不一致: {n}={v1} vs {m}={v2}")
+        if not bad and MIRROR.get(game):
+            print("  两套键一致 ✔")
         return 0
     if cmd == "set-windowed":
         r = set_windowed(game)
