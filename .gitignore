@@ -1,11 +1,12 @@
 logs/
 config/daily_config.yaml
+config/display_user.json
 downloads/
 tools/
 OneDragon-ref/
-*.7z
-*.part
 __pycache__/
 *.pyc
 _auto_daily.lock
 .venv/
+*.7z
+*.part

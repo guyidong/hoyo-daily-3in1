@@ -113,7 +113,10 @@ def run_game(game_key, games_cfg, dry_run=False):
     adapter = build_adapter(game_key, g, targets)
     try:
         if disp.get("auto_switch_window", True):
-            snap = display_mode.snapshot(game_key)
+            # 优先用"用户档案"里的设置：当前注册表若是上次自动化残留(1920x1080窗口化)，
+            # 用它当恢复目标只会把窗口化一路传下去（踩过的坑）。
+            snap, snap_src = display_mode.snapshot_for_restore(game_key)
+            log.info("[%s] 屏幕设置快照来源=%s", game_key, snap_src)
             display_mode.set_windowed(game_key,
                                       int(disp.get("auto_width", 1920)),
                                       int(disp.get("auto_height", 1080)))
@@ -131,11 +134,18 @@ def run_game(game_key, games_cfg, dry_run=False):
             adapter.stop()
         except Exception:
             pass
+        # ★ 顺序很重要：先杀游戏并等它彻底退出（Unity 退出瞬间会回写注册表），再恢复屏幕设置。
+        #   反过来做的话，游戏退出时会把窗口化又写回去 —— 用户第二天自己开游戏就是窗口。
+        kill_game(g.get("client_path"))
         if snap is not None:
             display_mode.restore(game_key, snap)
-            log.info("[%s] 已恢复用户原屏幕模式", game_key)
-        # 结束游戏进程（如果还在）
-        kill_game(g.get("client_path"))
+            log.info("[%s] 已恢复用户屏幕模式(来源=%s)", game_key, snap_src)
+            after = display_mode.snapshot(game_key)
+            if display_mode.is_automation_state(after, game_key):
+                log.warning("[%s] 恢复后仍是自动化状态，用用户档案再修一次", game_key)
+                prof = display_mode.user_state(game_key)
+                if prof:
+                    display_mode.restore(game_key, prof)
 
 
 def kill_game(client_path):
@@ -150,6 +160,20 @@ def kill_game(client_path):
             time.sleep(1)
     except Exception:
         pass
+
+
+def _final_display_safety(games):
+    """收尾保险：跑完后若某款游戏的屏幕设置又变回"自动化状态"，用用户档案修正。"""
+    for game_key in games:
+        try:
+            cur = display_mode.snapshot(game_key)
+            if display_mode.is_automation_state(cur, game_key):
+                prof = display_mode.user_state(game_key)
+                if prof:
+                    display_mode.restore(game_key, prof)
+                    log.warning("[%s] 收尾检查：屏幕设置仍是自动化状态，已按用户档案修正", game_key)
+        except Exception as e:
+            log.warning("[%s] 收尾检查失败: %s", game_key, e)
 
 
 def build_adapter(game_key, g, targets):
@@ -196,6 +220,8 @@ def _main_inner():
     results = {}
     for game_key in games:
         results[game_key] = run_game(game_key, cfg.get("games", {}), dry_run=dry)
+    if not dry:
+        _final_display_safety(games)
     print("==== 结果 ====")
     for k, v in results.items():
         print(f"  {k}: {v}")
