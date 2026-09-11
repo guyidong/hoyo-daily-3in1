@@ -234,17 +234,27 @@ def game_running(game) -> bool:
         return False
 
 
-def wait_game_exit(game, timeout_s: int = 10800, interval_s: int = 10) -> bool:
-    """等游戏进程退出（默认最多 3 小时）。返回是否已退出。"""
+def wait_game_exit(game, timeout_s: int = 10800, interval_s: int = 5, stable_s: int = 8) -> bool:
+    """等游戏进程退出（默认最多 3 小时），并要求连续 stable_s 秒都没有进程才返回。
+
+    为什么要"稳定期"：用户可能刚关掉就又点开，若这时写注册表，新进程早就读完旧设置了，
+    白改一次（踩过：差 2 秒，游戏还是窗口）。返回是否等到了稳定退出。"""
     import time
     waited = 0
-    while game_running(game):
+    while True:
+        if game_running(game):
+            if waited >= timeout_s:
+                return False
+            time.sleep(interval_s)
+            waited += interval_s
+            continue
+        # 进程没了：再观察 stable_s 秒，期间又冒出来就继续等
+        time.sleep(stable_s)
+        waited += stable_s
+        if not game_running(game):
+            return True
         if waited >= timeout_s:
             return False
-        time.sleep(interval_s)
-        waited += interval_s
-    time.sleep(5)   # 再等它把注册表写完
-    return True
 
 
 def current(game):
