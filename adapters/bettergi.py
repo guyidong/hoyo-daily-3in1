@@ -12,6 +12,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 def _run_hidden(cmd, **kw):
     """静默子进程：无控制台窗口（提权 pythonw 下反复闪终端的问题修复）。"""
     kw.setdefault("capture_output", True)
@@ -29,6 +30,8 @@ log = logging.getLogger("auto_daily")
 BASE = Path(__file__).resolve().parent.parent          # 项目根目录（本文件在 adapters/ 下）
 # 默认 <项目根>/tools/BetterGI/BetterGI；可用环境变量 HOYO_BETTERGI_DIR 覆盖
 BETTERGI_DIR = Path(os.environ.get("HOYO_BETTERGI_DIR") or (BASE / "tools" / "BetterGI" / "BetterGI"))
+sys.path.insert(0, str(BASE))   # 能 import 到项目根的模块
+import win_guard   # noqa: E402  游戏窗口兜底（16:9 检查/纠正）
 BETTERGI_EXE = BETTERGI_DIR / "BetterGI.exe"
 ONEDRAGON_DIR = BETTERGI_DIR / "User" / "OneDragon"
 LOG_DIR = BETTERGI_DIR / "User" / "log"
@@ -159,6 +162,8 @@ class BetterGIAdapter:
             name = cfg_path.stem
             log.info("[BetterGI] 启动一条龙配置 %s（秘境=%s）", name, t["name"])
             _launch(BETTERGI_EXE, f"startOneDragon {name}", BETTERGI_DIR)
+            # 窗口兜底：注册表万一没生效，游戏以 16:10 全屏起来时把它拉成 1920x1080 窗口
+            win_guard.watch_async("genshin")
             # 等本次 BetterGI 实例跑完并退出（CompletionAction=关闭游戏和软件）
             if not self._wait_exit(timeout_s=int(t.get("timeout_minutes", 60) * 60)):
                 log.warning("[BetterGI] 配置 %s 超时，跳过", name)

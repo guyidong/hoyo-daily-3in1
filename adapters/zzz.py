@@ -7,10 +7,14 @@
 #   4) 启动前先杀游戏：让 OneDragon 自己走"打开游戏 → 进入游戏"的完整流程
 #   5) 不使用任何虚拟手柄/驱动：前台模式 + 正常输入即可
 import os
+import sys
 import time
 import subprocess
 import logging
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # 能 import 到项目根的模块
+import win_guard   # noqa: E402  游戏窗口兜底（16:9 检查/纠正）
 
 log = logging.getLogger("auto_daily")
 
@@ -86,8 +90,9 @@ def _in_login_loop() -> bool:
     return any("点击进入游戏" in l for l in lines)
 
 
+
 class ZZZAdapter:
-    """绝区零适配器：OneDragon CLI + 虚拟手柄自动进入游戏。"""
+    """绝区零适配器：OneDragon CLI（前台模式）自动进入游戏并跑完每日。"""
 
     def __init__(self, cfg, targets):
         self.cfg = cfg
@@ -121,6 +126,8 @@ class ZZZAdapter:
             self._cli_log = subprocess.DEVNULL
         self.proc = subprocess.Popen(args, cwd=str(ONE_DRAGON_DIR), env=env,
                                      stdout=self._cli_log, stderr=subprocess.STDOUT)
+        # 窗口兜底：注册表万一没生效（游戏以 16:10 全屏起来），后台把它拉成 1920x1080 窗口
+        win_guard.watch_async("zzz")
         # 前台模式下 OneDragon 自行完成"点击进入游戏"（用户实测可用，无需任何虚拟手柄）
 
     def wait(self, timeout_s: int) -> bool:

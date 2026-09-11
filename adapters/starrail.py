@@ -7,6 +7,7 @@
 import ctypes
 import os
 import subprocess
+import sys
 def _run_hidden(cmd, **kw):
     """静默子进程：无控制台窗口（提权 pythonw 下反复闪终端的问题修复）。"""
     kw.setdefault("capture_output", True)
@@ -22,6 +23,8 @@ from pathlib import Path
 log = logging.getLogger("auto_daily")
 
 BASE = Path(__file__).resolve().parent.parent          # 项目根目录
+sys.path.insert(0, str(BASE))                          # 能 import 到项目根的模块
+import win_guard   # noqa: E402  游戏窗口兜底（16:9 检查/纠正）
 # 部署后路径（下载解压 March7thAssistant_full.zip 到此）；可用 HOYO_MARCH7TH_DIR 覆盖
 M7A_DIR = Path(os.environ.get("HOYO_MARCH7TH_DIR") or (BASE / "tools" / "March7thAssistant"))
 CONFIG_FILE = M7A_DIR / "config.yaml"   # 运行时配置在包根目录（首次运行自动从 example 生成）
@@ -125,6 +128,8 @@ class StarRailAdapter:
         else:
             ctypes.windll.shell32.ShellExecuteW(None, "runas", str(EXE), "main", str(M7A_DIR), 1)
             log.info("[March7th] 非提权上下文 runas 启动（UAC 一次）")
+        # 窗口兜底：注册表万一没生效，游戏以 16:10 全屏起来时把它拉成 1920x1080 窗口
+        win_guard.watch_async("starrail")
 
     def _running(self) -> bool:
         r = _run_hidden(["tasklist", "/FI", "IMAGENAME eq March7th Assistant.exe"],
