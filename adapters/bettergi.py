@@ -58,23 +58,26 @@ def kill_bettergi_if_running():
     time.sleep(1)
 
 
+def _task_switches(target: dict) -> dict:
+    """一条龙任务开关（BetterGI 内置任务名 -> 是否启用）。幽境危战默认关（手动打）。"""
+    return {
+        "领取邮件": True,
+        "合成树脂": True,
+        "自动秘境": True,
+        "自动幽境危战": bool(target.get("auto_stygian", False)),
+        "领取每日奖励": True,
+        "领取尘歌壶奖励": True,
+        "自动首领讨伐": False,
+    }
+
+
 def make_one_dragon_config(game_key: str, cfg: dict, target: dict, batch: str, idx: int) -> Path:
-    """生成/更新持久化一条龙配置（daily.json）。若用户已手动编辑过，仅更新任务相关字段。"""
+    """生成/更新持久化一条龙配置（daily.json）。用户手动改过的非任务字段会被保留。"""
     domain = target["name"]
-    defaults = {
+    settings = {
         "Name": "daily",
-        "TaskEnabledList": {
-            "领取邮件": True,
-            "合成树脂": True,
-            "自动秘境": True,
-            "自动幽境危战": bool(target.get("auto_stygian", False)),   # 默认关（用户手动打）
-            "领取每日奖励": True,
-            "领取尘歌壶奖励": True,
-        },
         "CraftingBenchCountry": "枫丹",
         "AdventurersGuildCountry": "枫丹",
-        "PartyName": cfg.get("party_name", ""),
-        "DomainName": domain,
         "WeeklyDomainEnabled": False,
         "DailyRewardPartyName": "",
         "MinResinToKeep": 0,
@@ -84,19 +87,31 @@ def make_one_dragon_config(game_key: str, cfg: dict, target: dict, batch: str, i
         "SecretTreasureObjects": [],
         "CompletionAction": "关闭游戏和软件",
     }
-    # 用户编辑优先：已有文件则保留用户改过的值，仅刷新任务相关字段
+    data = {}
     if ONE_DRAGON_CONFIG.exists():
         try:
             data = json.loads(ONE_DRAGON_CONFIG.read_text(encoding="utf-8"))
-            defaults.update(data)
         except Exception:
-            pass
-        defaults["PartyName"] = cfg.get("party_name", defaults.get("PartyName", ""))
-        defaults["DomainName"] = domain
-        defaults["TaskEnabledList"].update(defaults.get("TaskEnabledList", {}))
+            data = {}
+    # 用户已改过的值优先，本适配器只覆写下面这几个字段
+    for k, v in settings.items():
+        data.setdefault(k, v)
+    data["Name"] = "daily"
+    data["PartyName"] = cfg.get("party_name", data.get("PartyName", ""))
+    data["DomainName"] = domain
+    # ★ 任务开关必须按 BetterGI 自己的 GUID 键写：TaskDefinitions 是 {GUID: 任务名}。
+    #   写成中文名会被 BetterGI 的既有 TaskEnabledList 覆盖，开关等于没生效（实测踩坑）。
+    defs = data.get("TaskDefinitions") or {}
+    guid_of = {v: k for k, v in defs.items()}
+    tel = data.get("TaskEnabledList") or {}
+    for name, want in _task_switches(target).items():
+        g = guid_of.get(name)
+        if g:
+            tel[g] = want   # 只写 BetterGI 认得的任务，避免留下无对应任务的野键
+    data["TaskEnabledList"] = tel
     path = ONE_DRAGON_CONFIG
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(defaults, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     log.info("一条龙配置(可编辑/常驻): %s", path)
     return path
 
