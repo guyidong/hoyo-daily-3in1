@@ -92,46 +92,53 @@ def set_client_size(hwnd, w: int, h: int):
     return u.SetWindowPos(hwnd, 0, 0, 0, ow, oh, SWP_NOZORDER | SWP_SHOWWINDOW)
 
 
-def ensure_16_9(game: str, target=(1920, 1080), wait_s: int = 300, watch_s: int = 180) -> bool:
-    """等游戏窗口出现；客户区不是 16:9 就拉成 target（默认客户区 1920x1080）。返回是否已是 16:9。"""
+def _monitor(game: str, target, wait_s: int, interval_s: int, duration_s: int, stop) -> None:
+    """整场盯着游戏窗口：只要客户区不是 16:9 就拉回来。
+
+    为什么不能"修一次就收工"：实测（2026-09-13 绝区零）游戏**先以 1920x1080 窗口起来**，
+    进游戏后自己又切回 2560x1600 全屏，OneDragon 紧接着就 "未能识别当前画面" 全线失败。
+    所以必须一直盯着，任何时候不对都拉回来。"""
     exe = GAME_EXE.get(game, game)
     t0 = time.time()
-    hwnd = None
-    while time.time() - t0 < wait_s:
-        hwnd, _size = find_window(exe)
-        if hwnd:
-            break
-        time.sleep(3)
-    if not hwnd:
-        log.warning("[%s] 等了 %ss 没看到游戏窗口，跳过窗口兜底", game, wait_s)
-        return False
-    end = time.time() + watch_s
-    complained = False
-    while True:
+    fixed = 0
+    seen = False
+    while not stop.is_set() and time.time() - t0 < duration_s:
         hwnd, size = find_window(exe)
-        if hwnd and is_16_9(size):
-            if not complained:
-                log.info("[%s] 游戏窗口客户区 %dx%d 是 16:9 ✔", game, size[0], size[1])
-            return True
-        if hwnd:
-            if not complained:
-                log.warning("[%s] 游戏窗口客户区 %sx%s 不是 16:9（注册表没生效），拉成 %dx%d",
-                            game, size[0], size[1], target[0], target[1])
+        if hwnd is None:
+            if not seen and time.time() - t0 > wait_s:
+                log.info("[%s] 窗口监视结束：%ss 内没看到游戏窗口", game, wait_s)
+                return
+        elif is_16_9(size):
+            if not seen:
+                log.info("[%s] 游戏窗口客户区 %dx%d 是 16:9 ✔（继续盯着）", game, size[0], size[1])
+            seen = True
+        else:
+            seen = True
+            fixed += 1
+            log.warning("[%s] 游戏窗口客户区 %sx%s 不是 16:9，拉成 %dx%d（第 %d 次）",
+                        game, size[0], size[1], target[0], target[1], fixed)
             rc = set_client_size(hwnd, target[0], target[1])
-            time.sleep(4)
+            time.sleep(3)
             _h2, size2 = find_window(exe)
             if is_16_9(size2):
                 log.info("[%s] 已拉成客户区 %dx%d ✔（SetWindowPos=%s）", game, size2[0], size2[1], rc)
-                return True
-            if not complained:
-                log.warning("[%s] 拉窗口未生效（SetWindowPos=%s，当前客户区 %s），继续交给引擎尝试", game, rc, size2)
-            complained = True
-        if time.time() > end:
-            return False
-        time.sleep(15)
+            else:
+                log.warning("[%s] 拉窗口未生效（SetWindowPos=%s，当前客户区 %s）", game, rc, size2)
+        stop.wait(interval_s)
+    if stop.is_set() and seen:
+        log.info("[%s] 窗口监视结束（引擎已退出），期间修正 %d 次", game, fixed)
 
 
-def watch_async(game: str, target=(1920, 1080), wait_s: int = 300, watch_s: int = 180) -> None:
-    """后台线程跑 ensure_16_9，不阻塞主流程。"""
+def start_monitor(game: str, target=(1920, 1080), wait_s: int = 900, interval_s: int = 8,
+                  duration_s: int = 21600):
+    """后台起一个整场盯窗口的线程，返回 stop 事件（引擎结束时 set 它即可）。"""
     import threading
-    threading.Thread(target=ensure_16_9, args=(game, target, wait_s, watch_s), daemon=True).start()
+    stop = threading.Event()
+    threading.Thread(target=_monitor, args=(game, target, wait_s, interval_s, duration_s, stop),
+                     daemon=True).start()
+    return stop
+
+
+def watch_async(game: str, target=(1920, 1080), wait_s: int = 900):
+    """兼容旧调用：起监视线程，返回 stop 事件。"""
+    return start_monitor(game, target=target, wait_s=wait_s)

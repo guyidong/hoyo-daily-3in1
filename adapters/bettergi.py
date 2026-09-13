@@ -154,6 +154,7 @@ class BetterGIAdapter:
         self.batch = "daily_" + time.strftime("%Y%m%d_%H%M%S")
         self.proc = None
         self.finished = False
+        self._guard = None
 
     def start(self):
         kill_bettergi_if_running()   # 保证单实例（startOneDragon 参数走激活流程）
@@ -162,8 +163,9 @@ class BetterGIAdapter:
             name = cfg_path.stem
             log.info("[BetterGI] 启动一条龙配置 %s（秘境=%s）", name, t["name"])
             _launch(BETTERGI_EXE, f"startOneDragon {name}", BETTERGI_DIR)
-            # 窗口兜底：注册表万一没生效，游戏以 16:10 全屏起来时把它拉成 1920x1080 窗口
-            win_guard.watch_async("genshin")
+            # 窗口兜底：整场盯着游戏窗口（只起一次，多个 target 复用同一个监视线程）
+            if self._guard is None:
+                self._guard = win_guard.watch_async("genshin")
             # 等本次 BetterGI 实例跑完并退出（CompletionAction=关闭游戏和软件）
             if not self._wait_exit(timeout_s=int(t.get("timeout_minutes", 60) * 60)):
                 log.warning("[BetterGI] 配置 %s 超时，跳过", name)
@@ -180,6 +182,8 @@ class BetterGIAdapter:
 
     def stop(self):
         """auto_daily 契约接口：清理。"""
+        if self._guard is not None:
+            self._guard.set()
         kill_bettergi_if_running()
 
     def _wait_exit(self, timeout_s: int) -> bool:

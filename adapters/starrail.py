@@ -108,6 +108,7 @@ class StarRailAdapter:
         self.cfg = cfg
         self.targets = [t for t in targets if t.get("enabled", True)]
         self.proc = None
+        self._guard = None
 
     def _is_admin(self) -> bool:
         try:
@@ -128,8 +129,8 @@ class StarRailAdapter:
         else:
             ctypes.windll.shell32.ShellExecuteW(None, "runas", str(EXE), "main", str(M7A_DIR), 1)
             log.info("[March7th] 非提权上下文 runas 启动（UAC 一次）")
-        # 窗口兜底：注册表万一没生效，游戏以 16:10 全屏起来时把它拉成 1920x1080 窗口
-        win_guard.watch_async("starrail")
+        # 窗口兜底：整场盯着游戏窗口，任何时候不是 16:9 就拉回 1920x1080
+        self._guard = win_guard.watch_async("starrail")
 
     def _running(self) -> bool:
         r = _run_hidden(["tasklist", "/FI", "IMAGENAME eq March7th Assistant.exe"],
@@ -145,5 +146,7 @@ class StarRailAdapter:
         return False
 
     def stop(self):
+        if self._guard is not None:
+            self._guard.set()
         _run_hidden(["taskkill", "/IM", "March7th Assistant.exe", "/F"], capture_output=True)
         _run_hidden(["taskkill", "/IM", "March7thAssistant.exe", "/F"], capture_output=True)

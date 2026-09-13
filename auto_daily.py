@@ -137,6 +137,13 @@ def run_game(game_key, games_cfg, dry_run=False):
         # ★ 顺序很重要：先杀游戏并等它彻底退出（Unity 退出瞬间会回写注册表），再恢复屏幕设置。
         #   反过来做的话，游戏退出时会把窗口化又写回去 —— 用户第二天自己开游戏就是窗口。
         kill_game(g.get("client_path"))
+        # 引擎/游戏都退干净后，给适配器一个收尾机会（例如绝区零换回用户的全屏显示档）
+        try:
+            hook = getattr(adapter, "after_kill", None)
+            if callable(hook):
+                hook()
+        except Exception as e:
+            log.warning("[%s] after_kill 钩子失败: %s", game_key, e)
         if snap is not None:
             display_mode.restore(game_key, snap)
             log.info("[%s] 已恢复用户屏幕模式(来源=%s)", game_key, snap_src)

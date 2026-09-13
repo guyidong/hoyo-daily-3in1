@@ -1,6 +1,7 @@
 logs/
 config/daily_config.yaml
 config/display_user.json
+config/zzz_display_profiles/
 downloads/
 tools/
 OneDragon-ref/
