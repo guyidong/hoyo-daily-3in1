@@ -211,9 +211,30 @@ def main():
             pass
 
 
+def _sync_task_time(sched: dict) -> None:
+    """把计划任务触发时间对齐到配置里的 scheduler.daily_time（提权运行时才能真正改）。"""
+    want = str(sched.get("daily_time", "") or "").strip()
+    if len(want) != 5 or want[2] != ":":
+        return
+    try:
+        import task_sched
+        cur = task_sched.task_start_time()
+        if cur == want:
+            log.info("计划任务时间已是最新: 每天 %s", want)
+            return
+        ok, msg = task_sched.register_task(want)
+        if ok:
+            log.info("计划任务时间已对齐: %s -> %s", cur or "?", want)
+        else:
+            log.warning("计划任务时间对齐失败（需要管理员权限）: %s", msg)
+    except Exception as e:
+        log.warning("计划任务时间对齐异常: %s", e)
+
+
 def _main_inner():
     cfg = load_config()
     sched = cfg.get("scheduler", {})
+    _sync_task_time(sched)
     order = sched.get("run_order", ["genshin", "starrail", "zzz"])
     if len(sys.argv) >= 2 and sys.argv[1] in ("--dry-run", "-n"):
         dry = True

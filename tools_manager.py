@@ -17,9 +17,13 @@ TOOLS = {
     "bettergi": {
         "repo": "babalae/better-genshin-impact",
         "match": "BetterGI_v", "ext": ".7z",
+        # ★ 固定版本，不跟最新：0.65.0 是上游重构版（自己都标注"版本BUG较多"），
+        #   实测自动秘境里"识别出战角色失败 → 卡墙角 → 后续任务全被挡"，2026-09-19/20 连挂两天。
+        #   0.64.0 稳定可用。要升版本请先手动验证一条龙能跑完再改这里。
+        "tag": "0.64.0",
         "target": "tools/BetterGI",
         "exe": "tools/BetterGI/BetterGI/BetterGI.exe",
-        "desc": "原神 · BetterGI（免安装 7z 包）",
+        "desc": "原神 · BetterGI（免安装 7z 包，固定 0.64.0）",
     },
     "march7th": {
         "repo": "moesnow/March7thAssistant",
@@ -53,12 +57,14 @@ def _opener(proxy: str):
     return urllib.request.build_opener(*handlers)
 
 
-def latest_asset(repo: str, match: str, ext: str, proxy: str, token: str = ""):
-    """查最新 release，返回匹配资产的 (名称, 下载地址, 大小)。"""
+def latest_asset(repo: str, match: str, ext: str, proxy: str, token: str = "", tag: str = ""):
+    """查 release（给了 tag 就查指定版本，否则查最新），返回 (名称, 下载地址, 大小)。"""
     headers = {"User-Agent": "hoyo-daily-3in1"}
     if token:
         headers["Authorization"] = "token " + token
-    req = urllib.request.Request("https://api.github.com/repos/%s/releases/latest" % repo, headers=headers)
+    api = ("https://api.github.com/repos/%s/releases/tags/%s" % (repo, tag)) if tag \
+        else ("https://api.github.com/repos/%s/releases/latest" % repo)
+    req = urllib.request.Request(api, headers=headers)
     with _opener(proxy).open(req, timeout=60) as r:
         data = json.loads(r.read().decode("utf-8"))
     for a in data.get("assets", []):
@@ -127,7 +133,8 @@ def extract(archive: Path, target: Path):
 
 def install_one(key: str, proxy: str = "", token: str = ""):
     info = TOOLS[key]
-    name, url, size = latest_asset(info["repo"], info["match"], info["ext"], proxy, token)
+    name, url, size = latest_asset(info["repo"], info["match"], info["ext"], proxy, token,
+                                  tag=info.get("tag", ""))
     _log("找到 %s（%.0f MB）" % (name, size / 1048576))
     archive = DL_DIR / name
     if archive.exists() and archive.stat().st_size == size:

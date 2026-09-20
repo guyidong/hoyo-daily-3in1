@@ -34,7 +34,8 @@ sys.path.insert(0, str(BASE))   # 能 import 到项目根的模块
 import win_guard   # noqa: E402  游戏窗口兜底（16:9 检查/纠正）
 BETTERGI_EXE = BETTERGI_DIR / "BetterGI.exe"
 ONEDRAGON_DIR = BETTERGI_DIR / "User" / "OneDragon"
-LOG_DIR = BETTERGI_DIR / "User" / "log"
+# 日志在包根目录的 log/ 下（User/log 是旧路径，实测不存在 —— 之前完成标记因此一直没生效）
+LOG_DIR = BETTERGI_DIR / "log"
 ONE_DRAGON_CONFIG = ONEDRAGON_DIR / "daily.json"   # 固定配置名：可编辑、不删除
 COMPLETE_MARK = "一条龙和配置组任务结束"
 
@@ -132,17 +133,59 @@ def _tail_text(f, max_bytes: int = 300_000) -> str:
         return ""
 
 
-def _log_has_mark() -> bool:
-    if not LOG_DIR.exists():
-        return False
-    for f in sorted(LOG_DIR.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)[:3]:
+# 跑完要扫的"没跑成"特征。BetterGI 内部任务失败时进程照样正常退出，
+# 不扫这些就会只看到 ok=True —— 2026-09-19/20 就是这样连挂两天没人发现。
+FAIL_PATTERNS = ("游戏窗口分辨率不是 16:9", "识别出战角色失败", "任务启动失败", "执行异常")
+
+
+_LOG_BASE = {"name": "", "size": 0}
+
+
+def _log_baseline() -> None:
+    """记下"本次启动前"日志写到哪了。只看之后新增的内容，
+    否则会把上一次运行留下的完成标记/失败特征误当成这次的。"""
+    try:
+        f = sorted(LOG_DIR.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)[0]
+        _LOG_BASE["name"], _LOG_BASE["size"] = f.name, f.stat().st_size
+        log.info("[BetterGI] 日志基线: %s @ %d 字节", f.name, _LOG_BASE["size"])
+    except Exception:
+        _LOG_BASE["name"], _LOG_BASE["size"] = "", 0
+
+
+def _new_log_text(max_bytes: int = 300_000) -> str:
+    """本次运行以来新增的日志文本（跨天换文件时退化为读尾部）。"""
+    try:
+        files = sorted(LOG_DIR.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+    except Exception:
+        return ""
+    if not files:
+        return ""
+    newest = files[0]
+    if _LOG_BASE["name"] and newest.name == _LOG_BASE["name"]:
         try:
-            text = _tail_text(f)
-            if COMPLETE_MARK in text:
-                return True
+            with open(newest, "rb") as fp:
+                fp.seek(min(_LOG_BASE["size"], newest.stat().st_size))
+                return fp.read().decode("utf-8", errors="ignore")
         except Exception:
-            pass
-    return False
+            return ""
+    return _tail_text(newest, max_bytes)
+
+
+def _report_log_failures() -> None:
+    """扫本次运行日志里的失败特征，命中就在主日志里报 WARNING。"""
+    text = _new_log_text()
+    if not text:
+        return
+    hits = {p: text.count(p) for p in FAIL_PATTERNS if p in text}
+    if hits:
+        log.warning("[BetterGI] 日志有失败特征（本次可能没跑完）: %s", hits)
+    else:
+        log.info("[BetterGI] 日志检查通过：无失败特征")
+
+
+def _log_has_mark() -> bool:
+    """本次运行以来的日志里有没有完成标记。"""
+    return COMPLETE_MARK in _new_log_text()
 
 
 class BetterGIAdapter:
@@ -158,6 +201,7 @@ class BetterGIAdapter:
 
     def start(self):
         kill_bettergi_if_running()   # 保证单实例（startOneDragon 参数走激活流程）
+        _log_baseline()              # 记日志基线：只看本次新增的内容
         for idx, t in enumerate(self.targets):
             cfg_path = make_one_dragon_config("genshin", self.cfg, t, self.batch, idx)
             name = cfg_path.stem
@@ -203,7 +247,8 @@ class BetterGIAdapter:
             if running:
                 seen = True
             elif seen:
-                return True                       # 出现过又消失 = 完成
+                _report_log_failures()            # 出现过又消失 = 完成（顺手检查内部有没有失败）
+                return True
             elif time.time() - start > 60:
                 log.warning("[BetterGI] 60 秒内未见引擎进程，判定启动失败")
                 return False
@@ -211,7 +256,9 @@ class BetterGIAdapter:
                 for _ in range(30):
                     time.sleep(2)
                     if not _running():
+                        _report_log_failures()
                         return True
+                _report_log_failures()
                 return True
             now = time.time()
             if now - last_report > 30:
