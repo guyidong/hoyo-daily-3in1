@@ -62,16 +62,82 @@ def kill_bettergi_if_running():
     time.sleep(1)
 
 
-def _task_switches(target: dict) -> dict:
-    """一条龙任务开关（BetterGI 内置任务名 -> 是否启用）。幽境危战默认关（手动打）。"""
+def kill_game_if_running(client_path: str = "") -> None:
+    """关掉原神客户端并等它彻底退出（让 BetterGI 自己走"打开游戏 → 进游戏"的完整流程）。"""
+    exe = Path(client_path).name if client_path else "YuanShen.exe"
+    try:
+        _run_hidden(["taskkill", "/IM", exe, "/F"], capture_output=True)
+        for _ in range(30):
+            r = _run_hidden(["tasklist", "/FI", "IMAGENAME eq " + exe], capture_output=True, text=True)
+            if exe.lower() not in (r.stdout or "").lower():
+                return
+            time.sleep(1)
+    except Exception as e:
+        log.warning("[BetterGI] 关闭游戏失败: %s", e)
+
+
+LEYLINE_ASSET = BETTERGI_DIR / "GameTask" / "AutoLeyLineOutcrop" / "Assets" / "config.json"
+
+
+def _leyline_supported_countries() -> list:
+    """当前 BetterGI 的地脉花任务支持哪些国家（读它的资源文件，别猜）。
+
+    键名跨版本变过：0.64 用 mapPositions，0.66 改成 leyLinePositions（并新增了"至冬"）。"""
+    try:
+        data = json.loads(LEYLINE_ASSET.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return []
+    for key in ("leyLinePositions", "mapPositions"):
+        val = data.get(key)
+        if isinstance(val, dict) and val:
+            return list(val.keys())
+    return []
+
+
+def _check_leyline_countries(data: dict) -> None:
+    """地脉花按"星期X + 国家"配置。若配的国家当前版本不支持，任务会直接失败
+    （实测报 "冒险之证未找到国家: 至冬"），这里提前把话说清楚。"""
+    supported = _leyline_supported_countries()
+    if not supported:
+        return
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    bad = []
+    enabled_day = False
+    for d in days:
+        if data.get("LeyLineRun" + d):
+            enabled_day = True
+            c = (data.get("LeyLine%sCountry" % d) or "").strip()
+            if c and c not in supported:
+                bad.append("%s=%s" % (d, c))
+    if bad:
+        log.warning("[BetterGI] 地脉花配的国家当前版本不支持，会直接失败: %s（本版本支持: %s）",
+                    ", ".join(bad), "/".join(supported))
+    elif enabled_day:
+        log.info("[BetterGI] 地脉花国家检查通过（%s）", "/".join(supported))
+
+
+def _task_switches(cfg: dict, target: dict) -> dict:
+    """一条龙任务开关（BetterGI 内置任务名 -> 是否启用）。
+
+    幽境危战 / 地脉花 / 首领讨伐 三个"额外"任务按配置里的 targets 开关走：
+    你在 config/daily_config.yaml 里把对应的 target 设成 enabled: true 就会被打开
+    （之前幽境危战被写死跟随某个 target 的 auto_stygian，等于永远关着）。"""
+    def _target_on(*keys) -> bool:
+        for t in (cfg.get("targets") or []):
+            name = "%s%s" % (t.get("name") or "", t.get("mission_name") or "")
+            if any(k in name for k in keys):
+                return bool(t.get("enabled", True))
+        return False
+
     return {
         "领取邮件": True,
         "合成树脂": True,
         "自动秘境": True,
-        "自动幽境危战": bool(target.get("auto_stygian", False)),
+        "自动幽境危战": bool(target.get("auto_stygian")) or _target_on("幽境"),
+        "自动地脉花": bool(target.get("auto_leyline")) or _target_on("地脉"),
         "领取每日奖励": True,
         "领取尘歌壶奖励": True,
-        "自动首领讨伐": False,
+        "自动首领讨伐": _target_on("首领"),
     }
 
 
@@ -108,7 +174,7 @@ def make_one_dragon_config(game_key: str, cfg: dict, target: dict, batch: str, i
     defs = data.get("TaskDefinitions") or {}
     guid_of = {v: k for k, v in defs.items()}
     tel = data.get("TaskEnabledList") or {}
-    for name, want in _task_switches(target).items():
+    for name, want in _task_switches(cfg, target).items():
         g = guid_of.get(name)
         if g:
             tel[g] = want   # 只写 BetterGI 认得的任务，避免留下无对应任务的野键
@@ -117,6 +183,7 @@ def make_one_dragon_config(game_key: str, cfg: dict, target: dict, batch: str, i
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     log.info("一条龙配置(可编辑/常驻): %s", path)
+    _check_leyline_countries(data)
     return path
 
 
@@ -197,10 +264,13 @@ class BetterGIAdapter:
         self.batch = "daily_" + time.strftime("%Y%m%d_%H%M%S")
         self.proc = None
         self.finished = False
+        self.failed = False
         self._guard = None
 
     def start(self):
         kill_bettergi_if_running()   # 保证单实例（startOneDragon 参数走激活流程）
+        kill_game_if_running(self.cfg.get("client_path", ""))   # 先关游戏：让它自己从登录界面进游戏，
+                                     # 否则用户把游戏停在某个界面时 BetterGI 会一直等（实测 10/3-10/5 空等一小时）
         _log_baseline()              # 记日志基线：只看本次新增的内容
         for idx, t in enumerate(self.targets):
             cfg_path = make_one_dragon_config("genshin", self.cfg, t, self.batch, idx)
@@ -212,7 +282,8 @@ class BetterGIAdapter:
                 self._guard = win_guard.watch_async("genshin")
             # 等本次 BetterGI 实例跑完并退出（CompletionAction=关闭游戏和软件）
             if not self._wait_exit(timeout_s=int(t.get("timeout_minutes", 60) * 60)):
-                log.warning("[BetterGI] 配置 %s 超时，跳过", name)
+                log.error("[BetterGI] 配置 %s 超时（本次视为失败，别再报 ok=True）", name)
+                self.failed = True
             # 【不删除】daily.json 常驻，用户可在 BetterGI UI 中直接编辑
         self.finished = True
 
@@ -221,7 +292,7 @@ class BetterGIAdapter:
         注意：start() 内部已按 target 顺序等待完毕（self.finished），此处不得再等一次，
         否则会第二次看到"进程早已退出"而误报启动失败。"""
         if self.finished:
-            return True
+            return not self.failed      # 超时过就报失败（以前一律 True，把空跑一小时报成成功）
         return self._wait_exit(timeout_s)
 
     def stop(self):

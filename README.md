@@ -142,10 +142,17 @@ copy "D:\ZenlessZoneZero Game\ZenlessZoneZero_Data\Persistent\LocalStorage\*.bin
     它的窗口还受保护、拉不动。只能"换档"（见上），改注册表/SetWindowPos 都白费。
 11. **OneDragon 进程退出 ≠ 成功**：它识别失败后会自己中止（实测退出码 `0xC000013A`），
     所以 `wait()` 必须看退出码，否则会把失败报成成功。
-12. **BetterGI 不要无脑跟最新版**：0.65.0 是上游重构版（发布说明自己写着"版本BUG较多"），
-    实测自动秘境里「识别出战角色失败 → 卡墙角 → 后续任务全被挡」，2026-09-19/20 连挂两天。
-    `tools_manager.py` 已把 BetterGI **固定到 0.64.0**（`"tag": "0.64.0"`），自动更新器也禁用了
+12. **BetterGI 不要无脑跟最新版**（走过的路）：
+    - `0.65.0`＝上游重构版（发布说明自己写着"版本BUG较多"）→ 自动秘境「识别出战角色失败 → 卡墙角 → 后续任务全被挡」，9/19–9/20 连挂两天；
+    - 退回 `0.64.0` 稳定，但它的**地脉花国家列表里没有"至冬"**（7.x 新地区）→ 地脉花每天直接失败（`冒险之证未找到国家: 至冬`）；
+    - `0.66.0`＝地脉花配置换成新键 `leyLinePositions` 且**含"至冬"**，说明里也修了自动战斗相关问题 → 现在固定用它。
+    `tools_manager.py` 固定版本（`"tag": "0.66.0"`），自动更新器也禁用了
     （`BetterGI.update.exe` → `.disabled`）。要升级先手动验证一条龙能跑完再改。
+15. **额外任务（幽境危战 / 地脉花 / 首领讨伐）的开关看配置**：`config/daily_config.yaml` 里 targets 中
+    名字含"幽境""地脉""首领"的条目，`enabled: true/false` 直接决定 BetterGI 一条龙里对应任务开不开。
+    曾经把幽境危战写死成"跟随某个 target 的 auto_stygian"，结果永远关着（每天被跳过）。
+16. **地脉花按"星期X + 国家"配置**，国家必须在当前 BetterGI 版本支持列表里（读
+    `GameTask/AutoLeyLineOutcrop/Assets/config.json`，0.66 的键是 `leyLinePositions`），否则任务直接失败。
 13. **BetterGI 内部失败不反映在退出码上**：进程照样正常退出，只看退出码会一直显示 `ok=True`。
     所以跑完必须扫日志特征（`游戏窗口分辨率不是 16:9` / `识别出战角色失败` / `任务启动失败` / `执行异常`），
     命中就在主日志里报 WARNING —— 已在 `adapters/bettergi.py` 里实现。
