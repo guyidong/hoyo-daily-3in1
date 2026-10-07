@@ -198,8 +198,11 @@ def _task_switches(cfg: dict, target: dict) -> dict:
     }
 
 
-def make_one_dragon_config(game_key: str, cfg: dict, target: dict, batch: str, idx: int) -> Path:
-    """生成/更新持久化一条龙配置（daily.json）。用户手动改过的非任务字段会被保留。"""
+def make_one_dragon_config(game_key: str, cfg: dict, target: dict, batch: str, idx: int,
+                           switch_override: dict = None) -> Path:
+    """生成/更新持久化一条龙配置（daily.json）。用户手动改过的非任务字段会被保留。
+
+    switch_override：临时覆盖某些任务开关（例如"第 1 趟先别打地脉花/秘境"）。"""
     domain = target["name"]
     settings = {
         "Name": "daily",
@@ -238,7 +241,10 @@ def make_one_dragon_config(game_key: str, cfg: dict, target: dict, batch: str, i
     defs = data.get("TaskDefinitions") or {}
     guid_of = {v: k for k, v in defs.items()}
     tel = data.get("TaskEnabledList") or {}
-    for name, want in _task_switches(cfg, target).items():
+    switches = _task_switches(cfg, target)
+    if switch_override:
+        switches.update(switch_override)
+    for name, want in switches.items():
         g = guid_of.get(name)
         if g:
             tel[g] = want   # 只写 BetterGI 认得的任务，避免留下无对应任务的野键
@@ -267,6 +273,17 @@ def _tail_text(f, max_bytes: int = 300_000) -> str:
 # 跑完要扫的"没跑成"特征。BetterGI 内部任务失败时进程照样正常退出，
 # 不扫这些就会只看到 ok=True —— 2026-09-19/20 就是这样连挂两天没人发现。
 FAIL_PATTERNS = ("游戏窗口分辨率不是 16:9", "识别出战角色失败", "任务启动失败", "执行异常")
+
+# "幽境危战真的打了"的痕迹（只有活动开着并进战斗才会出现）
+STYGIAN_RAN_MARKS = ("自动幽境危战：执行战斗策略", "自动幽境危战：挑战成功",
+                     "自动幽境危战：选择Boss并开始挑战")
+# "活动没开"的痕迹
+STYGIAN_CLOSED_MARKS = ("活动已结束", "紊乱爆发期已结束", "未开启")
+
+
+def _stygian_ran(text: str) -> bool:
+    """本次日志里幽境危战是否真的开打了（= 活动在奖励周期内）。"""
+    return any(m in text for m in STYGIAN_RAN_MARKS)
 
 
 _LOG_BASE = {"name": "", "size": 0}
@@ -336,24 +353,47 @@ class BetterGIAdapter:
         self.failed = False
         self._guard = None
 
+    def _run_one_dragon(self, target: dict, timeout_s: int, idx: int, override: dict = None) -> None:
+        """起一趟一条龙并等它跑完。"""
+        cfg_path = make_one_dragon_config("genshin", self.cfg, target, self.batch, idx,
+                                          switch_override=override)
+        name = cfg_path.stem
+        log.info("[BetterGI] 启动一条龙配置 %s（秘境=%s）", name, target["name"])
+        _launch(BETTERGI_EXE, f"startOneDragon {name}", BETTERGI_DIR)
+        # 窗口兜底：整场盯着游戏窗口（只起一次，多趟复用同一个监视线程）
+        if self._guard is None:
+            self._guard = win_guard.watch_async("genshin")
+        if not self._wait_exit(timeout_s=timeout_s):
+            log.error("[BetterGI] 配置 %s 超时（本次视为失败，别再报 ok=True）", name)
+            self.failed = True
+
     def start(self):
         kill_bettergi_if_running()   # 保证单实例（startOneDragon 参数走激活流程）
         kill_game_if_running(self.cfg.get("client_path", ""))   # 先关游戏：让它自己从登录界面进游戏，
                                      # 否则用户把游戏停在某个界面时 BetterGI 会一直等（实测 10/3-10/5 空等一小时）
         _log_baseline()              # 记日志基线：只看本次新增的内容
-        for idx, t in enumerate(self.targets):
-            cfg_path = make_one_dragon_config("genshin", self.cfg, t, self.batch, idx)
-            name = cfg_path.stem
-            log.info("[BetterGI] 启动一条龙配置 %s（秘境=%s）", name, t["name"])
-            _launch(BETTERGI_EXE, f"startOneDragon {name}", BETTERGI_DIR)
-            # 窗口兜底：整场盯着游戏窗口（只起一次，多个 target 复用同一个监视线程）
-            if self._guard is None:
-                self._guard = win_guard.watch_async("genshin")
-            # 等本次 BetterGI 实例跑完并退出（CompletionAction=关闭游戏和软件）
-            if not self._wait_exit(timeout_s=int(t.get("timeout_minutes", 60) * 60)):
-                log.error("[BetterGI] 配置 %s 超时（本次视为失败，别再报 ok=True）", name)
-                self.failed = True
-            # 【不删除】daily.json 常驻，用户可在 BetterGI UI 中直接编辑
+        if not self.targets:
+            self.finished = True
+            return
+        t = self.targets[0]                      # 秘境 target（switch_only 的条目已在 __init__ 过滤掉）
+        timeout_s = int(t.get("timeout_minutes", 60) * 60)
+
+        # ★ 幽境危战优先：它一开（= 在奖励周期内），本次所有树脂都留给它，地脉花/秘境这趟不跑。
+        #   它没开的话 BetterGI 自己会跳过，我们靠日志判断，然后按当天规则再跑一趟花树脂。
+        sty = _find_target(self.cfg, "幽境")
+        sty_wanted = bool(sty) and bool(sty.get("enabled", True))
+        if sty_wanted:
+            log.info("[BetterGI] 第 1 趟：日常 + 幽境危战（地脉花/秘境本趟不跑，树脂留给危战）")
+            self._run_one_dragon(t, timeout_s, 0, {"自动地脉花": False, "自动秘境": False})
+            if not self.failed and _stygian_ran(_new_log_text()):
+                log.info("[BetterGI] 幽境危战在奖励周期内且已开打 → 树脂全归它，跳过地脉花/秘境")
+                self.finished = True
+                return
+            log.info("[BetterGI] 幽境危战这次没开打（活动未开/奖励周期外）→ 第 2 趟按当天规则花树脂")
+        # 第 2 趟：按当天规则打地脉花 / 圣遗物本（危战这次不重复跑）
+        self._run_one_dragon(t, timeout_s, 1 if sty_wanted else 0,
+                             {"自动幽境危战": False} if sty_wanted else None)
+        # 【不删除】daily.json 常驻，用户可在 BetterGI UI 中直接编辑
         self.finished = True
 
     def wait(self, timeout_s: int) -> bool:
