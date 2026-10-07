@@ -28,6 +28,10 @@ games:
     display: { auto_switch_window: true, auto_width: 1920, auto_height: 1080 }
     targets:
       - { name: "山风的荆冕", runs: 0, enabled: true }    # runs=0 表示清空树脂
+      # 额外任务开关（switch_only: true）：只决定 BetterGI 一条龙里开不开这两个任务，
+      # 它们不是秘境，不会各自再多跑一趟。地脉花打星期几/哪个国家在 BetterGI 界面里设。
+      - { name: "幽境危战", enabled: true, switch_only: true }
+      - { name: "地脉花",   enabled: true, switch_only: true }
 
   starrail:
     enabled: true

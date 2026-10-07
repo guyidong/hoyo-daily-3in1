@@ -260,7 +260,12 @@ class BetterGIAdapter:
 
     def __init__(self, cfg, targets):
         self.cfg = cfg
-        self.targets = [t for t in targets if t.get("enabled", True)]
+        # switch_only 的条目（幽境危战 / 地脉花 / 首领讨伐）只是"开哪个任务"的开关，
+        # 不是秘境：不能拿它们去起一条龙（否则会多跑几趟、还把 DomainName 写成"地脉花"）。
+        self.targets = [t for t in targets if t.get("enabled", True) and not t.get("switch_only")]
+        if not self.targets:
+            log.warning("[BetterGI] 配置里没有可跑的秘境 target（只剩 switch_only 条目）；"
+                        "一条龙至少要有一个秘境才能触发整轮任务")
         self.batch = "daily_" + time.strftime("%Y%m%d_%H%M%S")
         self.proc = None
         self.finished = False
