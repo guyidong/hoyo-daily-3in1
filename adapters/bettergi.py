@@ -8,6 +8,7 @@
 #      - 否则用 runas 提权（手动运行场景，弹一次 UAC）
 #   3) 配置 CompletionAction="关闭游戏和软件"，BetterGI 跑完会自动关游戏并退出自身
 import ctypes
+import datetime
 import json
 import os
 import re
@@ -116,28 +117,84 @@ def _check_leyline_countries(data: dict) -> None:
         log.info("[BetterGI] 地脉花国家检查通过（%s）", "/".join(supported))
 
 
+DAY_ALIASES = {
+    "monday": 0, "mon": 0, "周一": 0, "星期一": 0, "1": 0,
+    "tuesday": 1, "tue": 1, "周二": 1, "星期二": 1, "2": 1,
+    "wednesday": 2, "wed": 2, "周三": 2, "星期三": 2, "3": 2,
+    "thursday": 3, "thu": 3, "周四": 3, "星期四": 3, "4": 3,
+    "friday": 4, "fri": 4, "周五": 4, "星期五": 4, "5": 4,
+    "saturday": 5, "sat": 5, "周六": 5, "星期六": 5, "6": 5,
+    "sunday": 6, "sun": 6, "周日": 6, "周天": 6, "星期日": 6, "星期天": 6, "0": 6, "7": 6,
+}
+
+
+def _parse_days(days) -> set:
+    """把 config 里的 days 解析成 weekday 集合（0=周一 … 6=周日）。"
+    支持 ["Friday","周六"] / "周五~周日" / "5-6" 这几种写法。"""
+    if not days:
+        return set()
+    items = days if isinstance(days, (list, tuple)) else [days]
+    out = set()
+    for it in items:
+        s = str(it).strip()
+        if not s:
+            continue
+        for sep in ("~", "～", "到", "-"):
+            if sep in s:
+                a, _, b = s.partition(sep)
+                ka, kb = DAY_ALIASES.get(a.strip().lower()), DAY_ALIASES.get(b.strip().lower())
+                if ka is not None and kb is not None:
+                    d = ka
+                    while True:
+                        out.add(d)
+                        if d == kb:
+                            break
+                        d = (d + 1) % 7
+                    break
+            else:
+                k = DAY_ALIASES.get(s.lower())
+                if k is not None:
+                    out.add(k)
+    return out
+
+
+def _day_ok(t: dict) -> bool:
+    """这个 target 配了 days 就只在那些天生效；没配 = 每天生效。"""
+    days = _parse_days(t.get("days"))
+    if not days:
+        return True
+    return datetime.date.today().weekday() in days
+
+
+def _find_target(cfg: dict, *keys):
+    for t in (cfg.get("targets") or []):
+        name = "%s%s" % (t.get("name") or "", t.get("mission_name") or "")
+        if any(k in name for k in keys):
+            return t
+    return None
+
+
 def _task_switches(cfg: dict, target: dict) -> dict:
     """一条龙任务开关（BetterGI 内置任务名 -> 是否启用）。
 
-    幽境危战 / 地脉花 / 首领讨伐 三个"额外"任务按配置里的 targets 开关走：
-    你在 config/daily_config.yaml 里把对应的 target 设成 enabled: true 就会被打开
-    （之前幽境危战被写死跟随某个 target 的 auto_stygian，等于永远关着）。"""
-    def _target_on(*keys) -> bool:
-        for t in (cfg.get("targets") or []):
-            name = "%s%s" % (t.get("name") or "", t.get("mission_name") or "")
-            if any(k in name for k in keys):
-                return bool(t.get("enabled", True))
-        return False
+    幽境危战 / 地脉花 / 首领讨伐 按 config/daily_config.yaml 里的 targets 走；
+    每个 target 还可以配 `days`（例如周五~周日打圣遗物、周一~周四打地脉花）。"""
+    def _on(*keys) -> bool:
+        t = _find_target(cfg, *keys)
+        if not t:
+            return False
+        return bool(t.get("enabled", True)) and _day_ok(t)
 
     return {
         "领取邮件": True,
         "合成树脂": True,
-        "自动秘境": True,
-        "自动幽境危战": bool(target.get("auto_stygian")) or _target_on("幽境"),
-        "自动地脉花": bool(target.get("auto_leyline")) or _target_on("地脉"),
+        # 圣遗物本：配了 days 就按天开（例如只在周五~周日打）
+        "自动秘境": bool(target.get("enabled", True)) and _day_ok(target),
+        "自动幽境危战": bool(target.get("auto_stygian")) or _on("幽境"),
+        "自动地脉花": bool(target.get("auto_leyline")) or _on("地脉"),
         "领取每日奖励": True,
         "领取尘歌壶奖励": True,
-        "自动首领讨伐": _target_on("首领"),
+        "自动首领讨伐": _on("首领"),
     }
 
 
@@ -168,7 +225,14 @@ def make_one_dragon_config(game_key: str, cfg: dict, target: dict, batch: str, i
         data.setdefault(k, v)
     data["Name"] = "daily"
     data["PartyName"] = cfg.get("party_name", data.get("PartyName", ""))
-    data["DomainName"] = domain
+    # 秘境：如果用户在 BetterGI 界面里开了"每周秘境"并且今天这天配了秘境，就用他的那套；
+    # 否则用 config/daily_config.yaml 里 target 的 name（默认秘境）。
+    today = datetime.date.today().strftime("%A")   # Monday / Tuesday ...
+    weekly = (data.get("%sDomainName" % today) or "").strip() if data.get("WeeklyDomainEnabled") else ""
+    if weekly:
+        log.info("[BetterGI] 每周秘境生效：%s = %s（配置里的默认秘境 %s 本次不用）", today, weekly, domain)
+    else:
+        data["DomainName"] = domain
     # ★ 任务开关必须按 BetterGI 自己的 GUID 键写：TaskDefinitions 是 {GUID: 任务名}。
     #   写成中文名会被 BetterGI 的既有 TaskEnabledList 覆盖，开关等于没生效（实测踩坑）。
     defs = data.get("TaskDefinitions") or {}

@@ -27,11 +27,11 @@ games:
     party_name: "你的队伍名"                             # 打秘境用的队伍
     display: { auto_switch_window: true, auto_width: 1920, auto_height: 1080 }
     targets:
-      - { name: "山风的荆冕", runs: 0, enabled: true }    # runs=0 表示清空树脂
-      # 额外任务开关（switch_only: true）：只决定 BetterGI 一条龙里开不开这两个任务，
-      # 它们不是秘境，不会各自再多跑一趟。地脉花打星期几/哪个国家在 BetterGI 界面里设。
-      - { name: "幽境危战", enabled: true, switch_only: true }
-      - { name: "地脉花",   enabled: true, switch_only: true }
+      # days = 只在哪些天打（支持 "周五~周日" / ["Friday","周六"]）；不写 = 每天
+      - { name: "逆悬的冰河", runs: 0, enabled: true, days: "周五~周日" }   # 圣遗物本（runs=0 清空树脂）
+      # switch_only: true = 只是"开不开某个一条龙任务"的开关，不是秘境，不会多跑一趟
+      - { name: "地脉花",   enabled: true, switch_only: true, days: "周一~周四" }
+      - { name: "幽境危战", enabled: true, switch_only: true }   # 活动开着就打，没开 BetterGI 自己跳过
 
   starrail:
     enabled: true

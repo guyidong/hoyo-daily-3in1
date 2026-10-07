@@ -151,6 +151,16 @@ copy "D:\ZenlessZoneZero Game\ZenlessZoneZero_Data\Persistent\LocalStorage\*.bin
 15. **额外任务（幽境危战 / 地脉花 / 首领讨伐）的开关看配置**：`config/daily_config.yaml` 里 targets 中
     名字含"幽境""地脉""首领"的条目，`enabled: true/false` 直接决定 BetterGI 一条龙里对应任务开不开。
     曾经把幽境危战写死成"跟随某个 target 的 auto_stygian"，结果永远关着（每天被跳过）。
+17. **每个 target 可以配 `days` 做按天轮换**，例如「周一~周四打地脉花、周五~周日打圣遗物」：
+    ```yaml
+    targets:
+      - { name: "逆悬的冰河", runs: 0, enabled: true, days: "周五~周日" }
+      - { name: "地脉花",   enabled: true, switch_only: true, days: "周一~周四" }
+      - { name: "幽境危战", enabled: true, switch_only: true }   # 活动开着就打
+    ```
+    支持 `"周五~周日"` / `["Friday","周六"]` / `"5-6"` 三种写法；不配 = 每天。
+18. **适配器会覆写 `DomainName`**（秘境名取自 target 的 `name`）—— 所以在 BetterGI 界面里改秘境是没用的，
+    要改就改 `daily_config.yaml`。若界面里开了"每周秘境"且**当天**配了秘境，则以界面那套为准（会写日志）。
 16. **地脉花按"星期X + 国家"配置**，国家必须在当前 BetterGI 版本支持列表里（读
     `GameTask/AutoLeyLineOutcrop/Assets/config.json`，0.66 的键是 `leyLinePositions`），否则任务直接失败。
 13. **BetterGI 内部失败不反映在退出码上**：进程照样正常退出，只看退出码会一直显示 `ok=True`。
