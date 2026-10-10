@@ -31,7 +31,10 @@ games:
       - { name: "逆悬的冰河", runs: 0, enabled: true, days: "周五~周日" }   # 圣遗物本（runs=0 清空树脂）
       # switch_only: true = 只是"开不开某个一条龙任务"的开关，不是秘境，不会多跑一趟
       - { name: "地脉花",   enabled: true, switch_only: true, days: "周一~周四" }
-      - { name: "幽境危战", enabled: true, switch_only: true }   # 活动开着就打，没开 BetterGI 自己跳过
+      # enabled 可以写 ui：表示这个任务的开关完全听 BetterGI 界面的（推荐，界面里勾/取消都算数）
+      - { name: "幽境危战", enabled: ui,   switch_only: true }
+      # 优先级：BetterGI 界面 > 本文件。界面里填过的（队伍名/默认秘境/每周秘境/地脉花国家…）不会被覆盖；
+      # 只有本文件显式声明的（上面的 days、enabled: true/false）才由程序写进一条龙。
 
   starrail:
     enabled: true
