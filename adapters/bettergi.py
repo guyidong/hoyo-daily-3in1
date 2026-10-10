@@ -175,27 +175,29 @@ def _find_target(cfg: dict, *keys):
 
 
 def _task_switches(cfg: dict, target: dict) -> dict:
-    """一条龙任务开关（BetterGI 内置任务名 -> 是否启用）。
+    """返回"我们要写进 daily.json 的任务开关"。**没提到的任务一律不写**。
 
-    幽境危战 / 地脉花 / 首领讨伐 按 config/daily_config.yaml 里的 targets 走；
-    每个 target 还可以配 `days`（例如周五~周日打圣遗物、周一~周四打地脉花）。"""
-    def _on(*keys) -> bool:
-        t = _find_target(cfg, *keys)
-        if not t:
-            return False
-        return bool(t.get("enabled", True)) and _day_ok(t)
-
-    return {
-        "领取邮件": True,
-        "合成树脂": True,
+    优先级规则（用户 2026-10-10 明确要求：界面里配的应该算数）：
+      1) 秘境（自动秘境）：按当前 target 的 `days` 规则开/关 —— 这是你要求的按天轮换；
+      2) 额外任务（幽境危战 / 地脉花 / 首领讨伐）：只有配置里**显式写了 true/false** 才由我们控制；
+         写 `enabled: ui`（默认）或干脆不写这一条 → 完全听 BetterGI 界面的（你在界面里关掉就关掉）；
+      3) 日常四项（邮件 / 合成树脂 / 每日奖励 / 尘歌壶）：不由我们写，界面里怎么勾就怎么跑。"""
+    sw = {
         # 圣遗物本：配了 days 就按天开（例如只在周五~周日打）
         "自动秘境": bool(target.get("enabled", True)) and _day_ok(target),
-        "自动幽境危战": bool(target.get("auto_stygian")) or _on("幽境"),
-        "自动地脉花": bool(target.get("auto_leyline")) or _on("地脉"),
-        "领取每日奖励": True,
-        "领取尘歌壶奖励": True,
-        "自动首领讨伐": _on("首领"),
     }
+    for name, keys in (("自动幽境危战", ("幽境",)),
+                       ("自动地脉花", ("地脉",)),
+                       ("自动首领讨伐", ("首领",))):
+        t = _find_target(cfg, *keys)
+        if t is None:
+            continue
+        val = t.get("enabled", "ui")
+        if isinstance(val, str):
+            log.info("[BetterGI] %s 的开关听 BetterGI 界面（配置里是 enabled: %s）", name, val)
+            continue
+        sw[name] = bool(val) and _day_ok(t)
+    return sw
 
 
 def make_one_dragon_config(game_key: str, cfg: dict, target: dict, batch: str, idx: int,
@@ -227,13 +229,18 @@ def make_one_dragon_config(game_key: str, cfg: dict, target: dict, batch: str, i
     for k, v in settings.items():
         data.setdefault(k, v)
     data["Name"] = "daily"
-    data["PartyName"] = cfg.get("party_name", data.get("PartyName", ""))
-    # 秘境：如果用户在 BetterGI 界面里开了"每周秘境"并且今天这天配了秘境，就用他的那套；
-    # 否则用 config/daily_config.yaml 里 target 的 name（默认秘境）。
+    # ★ 优先级：BetterGI 界面 > 我们的配置。界面里填了就用界面的，界面空着才用配置里的值。
+    if (data.get("PartyName") or "").strip():
+        log.info("[BetterGI] 队伍用界面里设的: %s（配置里的 %s 本次不用）",
+                 data["PartyName"], cfg.get("party_name", ""))
+    else:
+        data["PartyName"] = cfg.get("party_name", "")
     today = datetime.date.today().strftime("%A")   # Monday / Tuesday ...
     weekly = (data.get("%sDomainName" % today) or "").strip() if data.get("WeeklyDomainEnabled") else ""
     if weekly:
-        log.info("[BetterGI] 每周秘境生效：%s = %s（配置里的默认秘境 %s 本次不用）", today, weekly, domain)
+        log.info("[BetterGI] 每周秘境生效：%s = %s（默认秘境 %s 本次不用）", today, weekly, data.get("DomainName"))
+    elif (data.get("DomainName") or "").strip():
+        log.info("[BetterGI] 默认秘境用界面里设的: %s（配置里的 %s 本次不用）", data["DomainName"], domain)
     else:
         data["DomainName"] = domain
     # ★ 任务开关必须按 BetterGI 自己的 GUID 键写：TaskDefinitions 是 {GUID: 任务名}。
