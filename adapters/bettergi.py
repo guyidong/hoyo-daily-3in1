@@ -329,6 +329,14 @@ def _report_log_failures() -> None:
         log.warning("[BetterGI] 日志有失败特征（本次可能没跑完）: %s", hits)
     else:
         log.info("[BetterGI] 日志检查通过：无失败特征")
+    # 兜底：启用了"要花树脂"的任务，日志里却一点树脂都没花 → 大声报警
+    #（10/10 就是这么静悄悄失败的：秘境进了、F 按了、然后没了，树脂 0 消耗）
+    wanted = ("自动秘境任务：执行" in text) or ("自动地脉花" in text) or ("自动幽境危战" in text)
+    # 注意引号可能是全角/弯引号，用正则匹配更稳
+    spent = re.search(r"使用\s*[“\"”]?(原粹|浓缩|脆弱|须臾)树脂", text) is not None
+    if wanted and not spent:
+        log.warning("[BetterGI] ⚠ 本次启用了要花树脂的任务，但日志里没有任何树脂消耗 —— "
+                    "大概率没跑成（去看 BetterGI 日志的最后一屏）")
 
 
 def _log_has_mark() -> bool:
@@ -378,21 +386,11 @@ class BetterGIAdapter:
         t = self.targets[0]                      # 秘境 target（switch_only 的条目已在 __init__ 过滤掉）
         timeout_s = int(t.get("timeout_minutes", 60) * 60)
 
-        # ★ 幽境危战优先：它一开（= 在奖励周期内），本次所有树脂都留给它，地脉花/秘境这趟不跑。
-        #   它没开的话 BetterGI 自己会跳过，我们靠日志判断，然后按当天规则再跑一趟花树脂。
-        sty = _find_target(self.cfg, "幽境")
-        sty_wanted = bool(sty) and bool(sty.get("enabled", True))
-        if sty_wanted:
-            log.info("[BetterGI] 第 1 趟：日常 + 幽境危战（地脉花/秘境本趟不跑，树脂留给危战）")
-            self._run_one_dragon(t, timeout_s, 0, {"自动地脉花": False, "自动秘境": False})
-            if not self.failed and _stygian_ran(_new_log_text()):
-                log.info("[BetterGI] 幽境危战在奖励周期内且已开打 → 树脂全归它，跳过地脉花/秘境")
-                self.finished = True
-                return
-            log.info("[BetterGI] 幽境危战这次没开打（活动未开/奖励周期外）→ 第 2 趟按当天规则花树脂")
-        # 第 2 趟：按当天规则打地脉花 / 圣遗物本（危战这次不重复跑）
-        self._run_one_dragon(t, timeout_s, 1 if sty_wanted else 0,
-                             {"自动幽境危战": False} if sty_wanted else None)
+        # 一趟跑完就好：一条龙里"幽境危战"排在 地脉花/秘境 之前（BetterGI 自带 TaskOrder），
+        # 危战开着时它先吃树脂；没开时 BetterGI 自己跳过，接着按当天规则打地脉花/秘境。
+        # ※ 曾为了"树脂全给危战"拆成两趟（第二趟重开游戏），10/10 实测第二趟进至冬秘境按 F 之后
+        #   BetterGI 直接没了、树脂一点没花 —— 换新游戏会话风险太大，回退单趟。
+        self._run_one_dragon(t, timeout_s, 0, None)
         # 【不删除】daily.json 常驻，用户可在 BetterGI UI 中直接编辑
         self.finished = True
 
