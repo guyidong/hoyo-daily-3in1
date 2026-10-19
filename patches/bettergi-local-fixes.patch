@@ -1,0 +1,115 @@
+﻿diff --git a/BetterGenshinImpact/GameTask/AutoLeyLineOutcrop/AutoLeyLineOutcropTask.cs b/BetterGenshinImpact/GameTask/AutoLeyLineOutcrop/AutoLeyLineOutcropTask.cs
+index b1a6065..49176f6 100644
+--- a/BetterGenshinImpact/GameTask/AutoLeyLineOutcrop/AutoLeyLineOutcropTask.cs
++++ b/BetterGenshinImpact/GameTask/AutoLeyLineOutcrop/AutoLeyLineOutcropTask.cs
+@@ -343,11 +343,35 @@ public class AutoLeyLineOutcropTask : ISoloTask
+ 
+     private async Task RunLeyLineChallenges()
+     {
++        // ★ 本地补丁（2026-10-14）：原来某朵花寻路失败（PathExecutor 抛"目标距离过远/当前点位无法
++        //   被识别"，或 ProcessLeyLineOutcrop 重试 3 次后抛"开启地脉花失败，已达最大重试次数"）
++        //   会把**整个地脉花任务**干掉（2026-10-14 在至冬只打了 2 朵就全停，树脂只花了 80）。
++        //   改成：这一朵失败 → 记日志 → 回主界面 → 去找下一朵；连续失败到上限才真的抛出。
++        const int maxSkip = 3;
++        var skipped = 0;
+         while (_currentRunTimes < _taskParam.Count)
+         {
+             await FindLeyLineOutcropByBook(_taskParam.Country, _taskParam.LeyLineOutcropType);
+ 
+-            var foundStrategy = await ExecuteMatchingStrategy();
++            bool foundStrategy;
++            try
++            {
++                foundStrategy = await ExecuteMatchingStrategy();
++            }
++            catch (Exception e) when (!_ct.IsCancellationRequested)
++            {
++                skipped++;
++                _logger.LogWarning("地脉花第 {Round} 朵寻路/开启失败（{Msg}），跳过这朵继续找下一朵（已跳过 {Skipped}/{Max}）",
++                    _currentRunTimes + 1, e.Message, skipped, maxSkip);
++                if (skipped >= maxSkip)
++                {
++                    throw;
++                }
++                await _returnMainUiTask.Start(_ct);
++                await Delay(800, _ct);
++                continue;
++            }
++
+             if (!foundStrategy)
+             {
+                 HandleNoStrategyFound();
+@@ -2261,6 +2285,22 @@ public class AutoLeyLineOutcropTask : ISoloTask
+     {
+         var counts = await CountAllResin();
+ 
++        // ★ 本地补丁（2026-10-14）：-1 表示"读不到"，不是真的 0。
++        //   回退用配置里的次数（固定次数模式）继续跑，别把整个任务判死。
++        if (counts.OriginalResinCount < 0)
++        {
++            var fallback = _taskParam.Count > 0 ? _taskParam.Count : 5;
++            _logger.LogWarning("树脂数量读取失败，回退为 {Fallback} 次（不判定为树脂耗尽）", fallback);
++            return new ResinCountResult
++            {
++                Count = fallback,
++                OriginalResinTimes = fallback,
++                CondensedResinTimes = 0,
++                TransientResinTimes = 0,
++                FragileResinTimes = 0
++            };
++        }
++
+         var originalTimes = counts.OriginalResinCount / 40;
+         var remaining = counts.OriginalResinCount % 40;
+         if (remaining >= 20)
+@@ -2311,23 +2351,36 @@ public class AutoLeyLineOutcropTask : ISoloTask
+     private async Task<int> CountOriginalResin()
+     {
+         var icon = BuildTemplate("Assets/1920x1080/original_resin.png");
+-        using var capture = CaptureToRectArea();
+-        var res = capture.Find(icon);
+-        if (res.IsEmpty())
++        // ★ 本地补丁（2026-10-14）：原版只截一次图，地图还没渲染完时找不到图标就 return 0，
++        //   上层据此判"树脂耗尽"并放弃整个地脉花任务（2026-10-13 整天 0 树脂就是这么来的）。
++        //   改成：最多等 10 秒、每秒重试；图标找到后 OCR 再重试 3 次；实在读不到返回 -1
++        //   （-1 = "读不到"，与真实的 0 区分开，交给上层处理）。
++        for (var attempt = 0; attempt < 10; attempt++)
+         {
+-            return 0;
+-        }
+-
+-        var roi = new Rect(res.X, res.Y, ScaleTo1080(200), ScaleTo1080(40));
+-        using var region = capture.DeriveCrop(roi);
+-        var text = OcrFactory.Paddle.OcrWithoutDetector(region.CacheGreyMat);
+-        var match = Regex.Match(text, @"(\d{1,3})\s*/\s*\d+");
+-        if (match.Success)
+-        {
+-            return int.TryParse(match.Groups[1].Value, out var value) ? value : 0;
++            using (var capture = CaptureToRectArea())
++            {
++                var res = capture.Find(icon);
++                if (!res.IsEmpty())
++                {
++                    var roi = new Rect(res.X, res.Y, ScaleTo1080(200), ScaleTo1080(40));
++                    using var region = capture.DeriveCrop(roi);
++                    for (var ocrTry = 0; ocrTry < 3; ocrTry++)
++                    {
++                        var text = OcrFactory.Paddle.OcrWithoutDetector(region.CacheGreyMat);
++                        var match = Regex.Match(text, @"(\d{1,3})\s*/\s*\d+");
++                        if (match.Success && int.TryParse(match.Groups[1].Value, out var value))
++                        {
++                            return value;
++                        }
++                        await Delay(300, _ct);
++                    }
++                }
++            }
++            await Delay(1000, _ct);
+         }
+ 
+-        return 0;
++        _logger.LogWarning("连续 10 秒未能在地图上识别到原粹树脂图标，按\"读不到\"处理");
++        return -1;
+     }
+ 
+     private async Task<int> CountCondensedResin()
