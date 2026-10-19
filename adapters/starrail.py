@@ -6,6 +6,7 @@
 #   3) 轮询进程退出判定完成
 import ctypes
 import os
+import re
 import subprocess
 import sys
 def _run_hidden(cmd, **kw):
@@ -39,6 +40,42 @@ DEFAULT_INSTANCE_NAMES = {
     "饰品提取": "永恒笑剧",
     "历战余响": "毁灭的开端",
 }
+
+# 进程退出码只说明"程序退出了"，不说明"事情干完了"（2026-10-18 报告记下的已知缺口）。
+# 2026-10-19 第一次真的撞上：开拓力 242→34 全被【历战余响 ×3（约 90）】+【优先合成沉浸器 ×3
+#   （每个 40，共约 120）】吃掉，配置里 5 次「侵蚀隧洞-观火之径」到体力计划时只剩 34
+#   （"开拓力 < 40 → 无法执行…保留该计划"，实跑 0 次），每日实训停在 400/500、奖励没领；
+#   引擎照样 exit 0，daily.log 写 ok=True —— 和原神 9/19 那种"假成功"一个味道。
+# 这里只做"让它显形"：扫今天的三月七日志，命中就打 WARNING/ERROR，不改退出判定
+#   （燃料被"历战余响/沉浸器"先吃掉属于资源分配，不算程序坏了）。
+M7A_SOFT_PATTERNS = ("保留该计划", "每日实训未完成", "合成材料失败", "战斗失败")
+
+
+def _scan_today_log() -> None:
+    """把"本次没干完"的痕迹写进 daily.log：开拓力起止 + 未完成/跳过特征。"""
+    try:
+        files = sorted((M7A_DIR / "logs").glob("*.log"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+    except Exception:
+        return
+    if not files:
+        return
+    f = files[0]
+    try:
+        text = f.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return
+    nums = re.findall(r"开拓力[:：]\s*(\d+)/300", text)
+    if nums:
+        log.info("[March7th] 开拓力: %s → %s/300（日志 %s，%d 处读数）",
+                 nums[0], nums[-1], f.name, len(nums))
+    hits = {p: text.count(p) for p in M7A_SOFT_PATTERNS if p in text}
+    if not hits:
+        log.info("[March7th] 日志检查通过：无未完成/跳过特征")
+        return
+    log.warning("[March7th] 日志有未完成/跳过特征（可能少刷了）: %s —— 日志 %s", hits, f.name)
+    if "每日实训未完成" in hits:
+        log.error("[March7th] 每日实训没满 500 分，今天的实训奖励领不到（看日志『今日实训』明细）")
 
 
 def write_config(cfg: dict, targets: list, game_path: str) -> None:
@@ -141,6 +178,7 @@ class StarRailAdapter:
         end = time.time() + timeout_s
         while time.time() < end:
             if not self._running():
+                _scan_today_log()   # 进程退出 ≠ 干完了：把"没干完"的痕迹写进 daily.log
                 return True   # 进程退出 = 完成（after_finish=Exit）
             time.sleep(10)
         return False
