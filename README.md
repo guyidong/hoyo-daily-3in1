@@ -184,6 +184,54 @@ copy "D:\ZenlessZoneZero Game\ZenlessZoneZero_Data\Persistent\LocalStorage\*.bin
     （启动时记日志基线），否则会把上一次运行的结果误当成这次的。
 9. **BetterGI 一条龙的任务开关是 GUID 键**（`TaskDefinitions` 是 `{GUID: 任务名}`）。按中文名写开关会被它自己已保存的状态整体覆盖，等于没配 —— 必须先反查 GUID 再写。
 
+## 日志判定的三层（不是"退出码 0 就算成功"）
+
+上游引擎内部任务失败时**进程照样正常退出**，所以光看退出码会一直是 `ok=True`。适配器把日志特征分成三层：
+
+| 层级 | 特征举例 | 处理 |
+|---|---|---|
+| **判失败** | `执行失败`、`已达最大重试次数`、`任务启动失败`、`识别出战角色失败`、`游戏窗口分辨率不是 16:9` | 本次 `ok=False` + ERROR |
+| **软告警**（可能少刷了，但不判死） | `放弃此路径点`、`距离过远`、`未完整匹配到当前队伍`、`存在角色死亡`、`战斗失败，重新寻找地脉花` | WARNING，让退化在 `daily.log` 里显形 |
+| **预期内**（不判失败） | 领奖页明确说树脂不够（`奖励页面树脂识别结果未匹配成功` + `今日还可使用`）且本次确实花过树脂 | WARNING + 把领奖页 OCR 原文写进日志，一眼分辨"没钱了"还是"认不出弹窗" |
+
+另外每次运行都会在 `daily.log` 记一行**树脂账**（`本次树脂消耗: 140（4 次领取: 40+40+40+20）`），
+不用再翻引擎日志数。崩铁适配器同理，会记录开拓力起止与"未完成/跳过"特征。
+
+## 本地补丁（可选）：把 BetterGI 的两个坑从源码层面修掉
+
+有些问题在上游引擎里，改配置绕不过去。本项目提供一份**针对上游源码的最小补丁**（不是 fork，不需要长期维护）：
+
+```
+patches/bettergi-local-fixes.patch      # git diff 生成，基于上游 0.66.2-alpha.2（commit 704d920）
+```
+
+修的两处：
+
+1. **地脉花寻路失败不再整任务挂掉**（`AutoLeyLineOutcropTask.RunLeyLineChallenges`）：
+   某朵花走不到时（`目标距离过远` / `当前点位无法被识别` / 重试耗尽），记日志→回主界面→**去找下一朵**，
+   连续失败 3 次才真的放弃。原版是一次失败就把整个地脉花任务干掉（2026-10-14 至冬只打了 2 朵、树脂只花 80）。
+2. **读树脂不再"读不到就当 0"**（`CountOriginalResin` / `CalCountByResin`）：
+   最多等 10 秒、每秒重试；图标出现后 OCR 再重试 3 次；实在读不到返回 `-1`（=读不到），
+   上层回退用配置次数继续跑，不再判"树脂耗尽"（2026-10-13 整天 0 树脂就是这么来的）。
+
+自己编译（需要 .NET 8 SDK，**不需要管理员**）：
+
+```bat
+rem 1) 装 SDK 到任意目录（官方脚本，用户级安装）
+powershell -c "Invoke-WebRequest https://dot.net/v1/dotnet-install.ps1 -OutFile %TEMP%\dotnet-install.ps1"
+powershell -c "%TEMP%\dotnet-install.ps1 -Channel 8.0 -InstallDir D:\dotnet -NoPath"
+
+rem 2) 取上游源码 + 打补丁
+git clone --depth 1 https://github.com/babalae/better-genshin-impact.git D:\BetterGI-src
+cd /d D:\BetterGI-src && git apply /path/to/patches/bettergi-local-fixes.patch
+
+rem 3) 编译到独立目录（不覆盖正在用的安装）
+D:\dotnet\dotnet.exe build BetterGenshinImpact\BetterGenshinImpact.csproj -c Release -o D:\BetterGI-patched
+```
+
+> 上游是 **GPL-3.0**：自己改了自用没问题；**若分发修改版必须公开对应源码**并注明基于哪个 commit。
+> 本补丁只改了 1 个文件（+68/−15 行），随时可以对照上游最新代码重做，不必维护长期 fork。
+
 ## 风险与免责
 
 - 使用第三方工具模拟操作**违背游戏用户协议，存在封号风险**，请自行评估；本项目不对此负责。
