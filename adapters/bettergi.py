@@ -279,7 +279,35 @@ def _tail_text(f, max_bytes: int = 300_000) -> str:
 
 # 跑完要扫的"没跑成"特征。BetterGI 内部任务失败时进程照样正常退出，
 # 不扫这些就会只看到 ok=True —— 2026-09-19/20 就是这样连挂两天没人发现。
-FAIL_PATTERNS = ("游戏窗口分辨率不是 16:9", "识别出战角色失败", "任务启动失败", "执行异常")
+# 2026-10-14 补：内部任务失败的真实文案是 "自动地脉花执行失败" / "自动秘境执行失败"
+#   （异常类型是 System.Exception，文案里是"执行失败"不是"执行异常"），
+#   旧清单漏了它，于是 10-14 地脉花只打了 2 次就挂、daily.log 仍报"无失败特征"+ok=True。
+FAIL_PATTERNS = ("游戏窗口分辨率不是 16:9", "识别出战角色失败", "任务启动失败",
+                 "执行异常", "执行失败", "已达最大重试次数")
+
+# 非致命但值得盯的"退化"特征：命中只 WARNING，不判失败。
+# "放弃此路径点" 是 至冬 地脉花寻路出问题的强信号（历史上只在 10-14 出现过 4 次，
+# 那天 6 次地脉花只完成 2 次）；偶尔放弃一个点还能自己恢复，所以不直接判失败。
+# 2026-10-15 补 "战斗失败，重新寻找地脉花"：当天出现 3 次 —— 识别到队伍角色后
+# "未完整匹配到当前队伍" → 退化成"万能战斗策略（萌新推荐）" → 白打一轮再重新找花。
+# 2026-10-16 补 "未完整匹配到当前队伍"：同一个根因在【自动秘境】路径上的签名。
+#   地脉花那条已在 10-15 加上，但秘境路径不走"重新寻找地脉花"，只留这一句，
+#   于是"退化成通用策略"照样打通关（挑战达成）→ 既不判失败、也不出任何 WARNING，
+#   汇总日志里完全隐形（10-16 当天 4 次、日志却写"检查通过：无失败特征"）。
+#   10-07 起连续 10 天出现（4~9 次/天），加进这里只为让它在 daily.log 里显形，不改判定。
+# 2026-10-18 补 "存在角色死亡"：当天第 4 趟秘境战斗中途阵亡，引擎自动传去七天神像
+#   复活后重跑一次才领到奖励（多花约 2 分钟，树脂没损失）。进程正常退出、日志里也
+#   没有任何 FAIL 特征，于是又一次变成"检查通过"完全隐形 —— 这趟其实重跑过。
+#   加进软告警只为让"重跑过"在 daily.log 里留痕，不判失败（引擎自己救回来了）。
+SOFT_WARN_PATTERNS = ("放弃此路径点", "距离过远", "战斗失败，重新寻找地脉花",
+                      "未完整匹配到当前队伍", "存在角色死亡")
+
+# 树脂不够时"卡在领奖页"的特征（2026-10-15 首次出现，21 天日志里零先例）。
+# 固定次数模式(LeyLineResinExhaustionMode=false)不会自己停：树脂花光后照样去打第 N 次，
+# 到领奖页找不到能点的树脂选项 → 重试 2 次 → "自动地脉花执行失败:无法领取奖励"。
+# 当天 5 次 × 40 = 200（正好是树脂上限），第 6 次没钱付 —— 属于"次数配得比树脂多"，
+# 不是寻路/脚本坏了，所以单独把 OCR 原文记下来，方便一眼分辨。
+RESIN_BLOCKED_PATTERNS = ("奖励页面树脂识别结果未匹配成功", "无法领取奖励")
 
 # "幽境危战真的打了"的痕迹（只有活动开着并进战斗才会出现）
 STYGIAN_RAN_MARKS = ("自动幽境危战：执行战斗策略", "自动幽境危战：挑战成功",
@@ -326,24 +354,65 @@ def _new_log_text(max_bytes: int = 300_000) -> str:
     return _tail_text(newest, max_bytes)
 
 
-def _report_log_failures() -> None:
-    """扫本次运行日志里的失败特征，命中就在主日志里报 WARNING。"""
+def _report_log_failures() -> bool:
+    """扫本次运行日志里的失败特征，命中就在主日志里报 WARNING，并返回 True（=本次失败）。
+
+    返回 True 时调用方会把本次运行判为失败，这样 daily.log 里不会再出现
+    "引擎已退出 + ok=True" 的假成功。"""
     text = _new_log_text()
     if not text:
-        return
+        return False
+    failed = False
     hits = {p: text.count(p) for p in FAIL_PATTERNS if p in text}
-    if hits:
-        log.warning("[BetterGI] 日志有失败特征（本次可能没跑完）: %s", hits)
+    amounts = [int(m) for m in re.findall(
+        r"使用\s*[“\"”]?(?:原粹|浓缩|脆弱|须臾)树脂[”\"’]?\s*[,，]?\s*数量[：:]\s*(\d+)", text)]
+    # 2026-10-19：树脂花光导致的“执行失败”不是故障 —— 固定次数模式(LeyLineResinExhaustionMode=false)
+    #   不会自己停：当天至冬地脉花领了 4 次（40+40+40+20=140 树脂），第 5 次到领奖页已经一粒树脂都没有
+    #   （OCR 原文：“使用20个原粹树脂补充…今日还可使用6次”），引擎重试 2 次后报
+    #   “自动地脉花执行失败:无法领取奖励”，被 FAIL_PATTERNS 里的“执行失败”整轮判成失败。
+    #   10-18 报告早已预警：至冬 6 次 × 40 = 240 > 树脂上限(200)，周一~周四几乎必然触发。
+    #   降级条件刻意收窄：必须“领奖页明确说树脂不够 + 本次确实花过树脂 + 失败特征只有执行失败”，
+    #   这样“领奖页认不出新弹窗”“寻路卡死”之类的真故障仍然照旧判失败。
+    resin_short = ("无法领取奖励" in text) and bool(amounts) and \
+                  ("原粹树脂补充" in text or "今日还可使用" in text)
+    expected = resin_short and set(hits) <= {"执行失败"}
+    if hits and not expected:
+        log.error("[BetterGI] 日志有失败特征（本次没跑完）: %s", hits)
+        failed = True
+    elif hits:
+        log.warning("[BetterGI] 树脂已花光，固定次数打不满（预期，不判失败）: %s；"
+                    "本次已花 %d 树脂（%s）—— 想打满请到 BetterGI 界面把地脉花次数调低",
+                    hits, sum(amounts), "+".join(str(a) for a in amounts))
     else:
         log.info("[BetterGI] 日志检查通过：无失败特征")
+    soft = {p: text.count(p) for p in SOFT_WARN_PATTERNS if p in text}
+    if soft:
+        log.warning("[BetterGI] 日志有寻路/重试退化特征（可能少刷了）: %s", soft)
+    # 树脂不够导致"卡在领奖页"的诊断：把领奖页 OCR 原文也写进 daily.log，
+    # 这样"无法领取奖励"到底是树脂花光了、还是引擎认不出新弹窗，一眼能分辨。
+    blocked = {p: text.count(p) for p in RESIN_BLOCKED_PATTERNS if p in text}
+    if blocked:
+        _lvl = log.warning if expected else log.error
+        _lvl("[BetterGI] ⚠ 领奖页选不出树脂（%s）—— 固定次数模式下树脂花光就会这样："
+             "任务不会自己停，会一直重试到失败。对照下面『本次树脂消耗』，"
+             "若已把树脂花光，就是树脂不够（不是寻路/脚本坏了）", blocked)
+        m = re.search(r'奖励页面树脂识别结果未匹配成功，ocr="([^"]*)"', text)
+        if m:
+            _lvl("[BetterGI] 领奖页 OCR 原文: %s", m.group(1))
+    # 树脂账：把"这次花掉多少树脂"直接写进 daily.log，省得每天翻引擎日志。
+    # （10-13 是 0 树脂静静地失败，10-14 是只花了 80/120）
+    spent = bool(amounts) or re.search(r"使用\s*[“\"”]?(原粹|浓缩|脆弱|须臾)树脂", text) is not None
+    if amounts:
+        log.info("[BetterGI] 本次树脂消耗: %d（%d 次领取: %s）", sum(amounts), len(amounts),
+                 "+".join(str(a) for a in amounts))
     # 兜底：启用了"要花树脂"的任务，日志里却一点树脂都没花 → 大声报警
     #（10/10 就是这么静悄悄失败的：秘境进了、F 按了、然后没了，树脂 0 消耗）
     wanted = ("自动秘境任务：执行" in text) or ("自动地脉花" in text) or ("自动幽境危战" in text)
-    # 注意引号可能是全角/弯引号，用正则匹配更稳
-    spent = re.search(r"使用\s*[“\"”]?(原粹|浓缩|脆弱|须臾)树脂", text) is not None
     if wanted and not spent:
-        log.warning("[BetterGI] ⚠ 本次启用了要花树脂的任务，但日志里没有任何树脂消耗 —— "
-                    "大概率没跑成（去看 BetterGI 日志的最后一屏）")
+        log.error("[BetterGI] ⚠ 本次启用了要花树脂的任务，但日志里没有任何树脂消耗 —— "
+                  "大概率没跑成（去看 BetterGI 日志的最后一屏）")
+        failed = True
+    return failed
 
 
 def _log_has_mark() -> bool:
@@ -415,6 +484,11 @@ class BetterGIAdapter:
             self._guard.set()
         kill_bettergi_if_running()
 
+    def _finish_check(self) -> None:
+        """引擎退出后的收尾判定：日志里有失败特征就把本次判为失败（不再是 ok=True）。"""
+        if _report_log_failures():
+            self.failed = True
+
     def _wait_exit(self, timeout_s: int) -> bool:
         """等待引擎完成。修复：runas 是异步的，若进程还未出现就判'完成'会误杀刚拉起的引擎。
         逻辑：启动宽限期内等待进程出现(seen=True)；只有 seen=True 后进程消失(或出现完成标记)才算完成。"""
@@ -432,7 +506,7 @@ class BetterGIAdapter:
             if running:
                 seen = True
             elif seen:
-                _report_log_failures()            # 出现过又消失 = 完成（顺手检查内部有没有失败）
+                self._finish_check()              # 出现过又消失 = 完成（顺手检查内部有没有失败）
                 return True
             elif time.time() - start > 60:
                 log.warning("[BetterGI] 60 秒内未见引擎进程，判定启动失败")
@@ -441,9 +515,9 @@ class BetterGIAdapter:
                 for _ in range(30):
                     time.sleep(2)
                     if not _running():
-                        _report_log_failures()
+                        self._finish_check()
                         return True
-                _report_log_failures()
+                self._finish_check()
                 return True
             now = time.time()
             if now - last_report > 30:
